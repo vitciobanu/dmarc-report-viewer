@@ -28,7 +28,7 @@ $stmt = $pdo->prepare("
         COALESCE(SUM(CASE WHEN rec.eval_spf  = 'pass' THEN rec.msg_count ELSE 0 END), 0) AS spf_pass,
         COALESCE(SUM(CASE WHEN rec.eval_dkim = 'pass' THEN rec.msg_count ELSE 0 END), 0) AS dkim_pass,
         COALESCE(SUM(CASE WHEN rec.eval_dkim = 'pass' AND rec.eval_spf = 'pass' THEN rec.msg_count ELSE 0 END), 0) AS aligned,
-        COALESCE(SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
+        COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
     WHERE rep.date_begin BETWEEN :from AND :to
@@ -44,7 +44,7 @@ $sum = $stmt->fetch();
 $stmt = $pdo->prepare("
     SELECT
         COALESCE(SUM(rec.msg_count), 0) AS total,
-        COALESCE(SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
+        COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
     WHERE rep.date_begin BETWEEN :from AND :to
@@ -87,8 +87,8 @@ $stmt = $pdo->prepare("
     SELECT
         DATE(rep.date_begin) AS day,
         SUM(CASE WHEN rec.eval_dkim = 'pass' AND rec.eval_spf = 'pass' THEN rec.msg_count ELSE 0 END) AS aligned,
-        SUM(CASE WHEN (rec.eval_dkim = 'pass') XOR (rec.eval_spf = 'pass') THEN rec.msg_count ELSE 0 END) AS partial,
-        SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END) AS fails
+        SUM(CASE WHEN (COALESCE(rec.eval_dkim, '') = 'pass') XOR (COALESCE(rec.eval_spf, '') = 'pass') THEN rec.msg_count ELSE 0 END) AS partial,
+        SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
     WHERE rep.date_begin BETWEEN :from AND :to
@@ -147,8 +147,8 @@ if ($cat && $selDay) {
     // $catCond comes from this fixed match, never from user input.
     $catCond = match ($cat) {
         'aligned' => "rec.eval_dkim = 'pass' AND rec.eval_spf = 'pass'",
-        'partial' => "(rec.eval_dkim = 'pass') XOR (rec.eval_spf = 'pass')",
-        'fail'    => "rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass'",
+        'partial' => "(COALESCE(rec.eval_dkim, '') = 'pass') XOR (COALESCE(rec.eval_spf, '') = 'pass')",
+        'fail'    => "COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass'",
     };
     $stmt = $pdo->prepare("
         SELECT rec.*, rep.org_name, rep.id AS rep_id
@@ -168,7 +168,7 @@ $stmt = $pdo->prepare("
     SELECT rep.*,
            COUNT(rec.id)                AS n_records,
            COALESCE(SUM(rec.msg_count), 0) AS n_msgs,
-           COALESCE(SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS n_fails
+           COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS n_fails
     FROM reports rep
     LEFT JOIN records rec ON rec.report_id = rep.id
     WHERE rep.date_begin BETWEEN :from AND :to
@@ -187,7 +187,7 @@ $stmt = $pdo->prepare("
            SUM(rec.msg_count)    AS n_msgs,
            SUM(CASE WHEN rec.eval_spf  = 'pass' THEN rec.msg_count ELSE 0 END) AS spf_pass,
            SUM(CASE WHEN rec.eval_dkim = 'pass' THEN rec.msg_count ELSE 0 END) AS dkim_pass,
-           SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END) AS n_fails
+           SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END) AS n_fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
     WHERE rep.date_begin BETWEEN :from AND :to

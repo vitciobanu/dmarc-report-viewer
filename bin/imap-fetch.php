@@ -403,7 +403,7 @@ try {
 
     $saveDir = dirname(__DIR__) . '/uploads/imap';
     if (!is_dir($saveDir)) {
-        mkdir($saveDir, 0777, true);
+        mkdir($saveDir, 0755, true);
     }
 
     // Per-folder progress: the highest UID already examined, so every

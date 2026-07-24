@@ -91,7 +91,7 @@ $stmt = $pdo->prepare("
            MAX(rep.date_end)      AS last_seen,
            SUM(CASE WHEN rec.eval_spf  = 'pass' THEN rec.msg_count ELSE 0 END) AS spf_pass,
            SUM(CASE WHEN rec.eval_dkim = 'pass' THEN rec.msg_count ELSE 0 END) AS dkim_pass,
-           SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END) AS n_fails
+           SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END) AS n_fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
     WHERE rep.date_begin BETWEEN :from AND :to

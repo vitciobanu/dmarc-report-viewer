@@ -76,8 +76,11 @@ function gz_read_limited(string $path, int $maxBytes): string
 }
 
 /**
- * Extract every .xml inside a zip, checking each entry's declared
- * uncompressed size against the limit BEFORE extracting it.
+ * Extract every .xml inside a zip. Three layers of bomb protection:
+ * the entry's DECLARED size is checked before extracting, the ACTUAL
+ * extracted size is re-checked after (the declared size lives in the
+ * zip's own metadata, so a crafted archive can lie about it), and the
+ * total across all entries — plus the entry count — is capped too.
  *
  * @return array<int, array{name: string, xml: string}>
  */
@@ -88,7 +91,10 @@ function zip_read_limited(string $path, int $maxBytes): array
         throw new RuntimeException('could not open zip file');
     }
 
-    $results = [];
+    $results    = [];
+    $totalBytes = 0;
+    $maxEntries = 200; // a legit report batch is a handful of files
+
     for ($i = 0; $i < $zip->numFiles; $i++) {
         $stat = $zip->statIndex($i);
         if ($stat === false) {
@@ -98,14 +104,27 @@ function zip_read_limited(string $path, int $maxBytes): array
         if (str_ends_with($stat['name'], '/') || !preg_match('/\.xml$/i', $stat['name'])) {
             continue;
         }
+        if (count($results) >= $maxEntries) {
+            $zip->close();
+            throw new RuntimeException("zip contains more than $maxEntries XML entries");
+        }
         if ($stat['size'] > $maxBytes) {
             $zip->close();
             throw new RuntimeException("zip entry '{$stat['name']}' exceeds the size limit");
         }
-        $xml = $zip->getFromIndex($i);
-        if ($xml !== false) {
-            $results[] = ['name' => basename($stat['name']), 'xml' => $xml];
+        // Read at most $maxBytes+1 bytes no matter what the entry claims
+        // (the declared size above is attacker-controlled metadata) —
+        // one extra byte lets us detect an entry that ran over the cap.
+        $xml = $zip->getFromIndex($i, $maxBytes + 1);
+        if ($xml === false) {
+            continue;
         }
+        $totalBytes += strlen($xml);
+        if (strlen($xml) > $maxBytes || $totalBytes > $maxBytes) {
+            $zip->close();
+            throw new RuntimeException('decompressed content exceeds the size limit');
+        }
+        $results[] = ['name' => basename($stat['name']), 'xml' => $xml];
     }
     $zip->close();
 
