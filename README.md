@@ -10,6 +10,31 @@ lightweight alternative to hosted DMARC dashboards (Postmark DMARC,
 EasyDMARC...) and to heavier self-hosted stacks (parsedmarc + Elasticsearch,
 dmarc-visualizer + Grafana).
 
+## Screenshots
+
+> All figures use anonymized demo data — the domain `example.com` and
+> [RFC 5737](https://datatracker.ietf.org/doc/html/rfc5737) documentation
+> IP ranges, not real reports.
+
+**Dashboard** — pass-rate summary, policy advisor and an interactive daily
+timeline; clicking a bar segment lists that day's records below it.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+**Report detail** — every record in one aggregate report, with the
+alignment-aware SPF/DKIM results and raw-auth badges.
+
+![Report detail](docs/screenshots/report.png)
+
+**Source IPs** — every sender aggregated over the range; rows with DMARC
+failures are highlighted.
+
+![Source IPs](docs/screenshots/ips.png)
+
+**Upload** — drag & drop `.xml` / `.xml.gz` / `.zip` reports.
+
+![Upload](docs/screenshots/upload.png)
+
 ## Features
 
 - **Upload page** with drag & drop and multi-file support — accepts
