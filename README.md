@@ -143,4 +143,4 @@ that the reports reveal your mail flow metadata.
 
 ## License
 
-MIT
+Released under the [MIT License](LICENSE).
