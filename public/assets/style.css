@@ -1,0 +1,329 @@
+/* ==========================================================================
+   DMARC Report Viewer — single stylesheet, no frameworks.
+   Light/dark aware via prefers-color-scheme.
+   ========================================================================== */
+
+:root {
+    --bg: #f5f7fa;
+    --surface: #ffffff;
+    --text: #1c2733;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --ok: #16a34a;
+    --ok-soft: #dcfce7;
+    --bad: #dc2626;
+    --bad-soft: #fee2e2;
+    --warn: #d97706;
+    --warn-soft: #fef3c7;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgb(16 24 40 / .08);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #0f172a;
+        --surface: #1e293b;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --border: #334155;
+        --accent: #60a5fa;
+        --accent-soft: #1e3a5f;
+        --ok: #4ade80;
+        --ok-soft: #14351f;
+        --bad: #f87171;
+        --bad-soft: #3f1d1d;
+        --warn: #fbbf24;
+        --warn-soft: #3a2c10;
+        --shadow: 0 1px 3px rgb(0 0 0 / .4);
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    background: var(--bg);
+    color: var(--text);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---- Top bar ---------------------------------------------------------- */
+
+.topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.topbar-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    height: 56px;
+}
+
+.brand { font-weight: 700; font-size: 16px; }
+
+.topbar nav { display: flex; gap: 4px; }
+
+.topbar nav a {
+    padding: 6px 14px;
+    border-radius: 999px;
+    color: var(--muted);
+    font-weight: 500;
+}
+
+.topbar nav a:hover { color: var(--text); text-decoration: none; }
+
+.topbar nav a.active { background: var(--accent-soft); color: var(--accent); }
+
+/* ---- Layout ----------------------------------------------------------- */
+
+.container { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
+
+.footer {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 16px 20px 32px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+h1 { font-size: 24px; margin: 8px 0 16px; }
+h2 { font-size: 17px; margin: 28px 0 10px; }
+
+.page-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+/* ---- Cards / summary tiles -------------------------------------------- */
+
+.cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 14px;
+    margin: 18px 0;
+}
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+}
+
+.card .label { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
+.card .value { font-size: 26px; font-weight: 700; margin-top: 2px; }
+.card .value.ok   { color: var(--ok); }
+.card .value.bad  { color: var(--bad); }
+.card .value.warn { color: var(--warn); }
+.card .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+/* ---- Panels ----------------------------------------------------------- */
+
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 16px 18px;
+    margin: 14px 0;
+}
+
+.panel h2 { margin-top: 0; }
+
+/* Policy advisor states */
+.advisor { border-left: 4px solid var(--muted); }
+.advisor.ok   { border-left-color: var(--ok); }
+.advisor.warn { border-left-color: var(--warn); }
+.advisor.bad  { border-left-color: var(--bad); }
+.advisor .headline { font-weight: 600; }
+.advisor p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+
+/* ---- Tables ----------------------------------------------------------- */
+
+.table-wrap { overflow-x: auto; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    font-size: 14px;
+}
+
+th, td {
+    text-align: left;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+th {
+    background: color-mix(in srgb, var(--surface) 92%, var(--text));
+    color: var(--muted);
+    font-size: 12.5px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: color-mix(in srgb, var(--surface) 96%, var(--accent)); }
+
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* A row flagged as a potential spoof (DMARC fail) */
+tr.row-bad td { background: var(--bad-soft); }
+tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--bad)); }
+
+/* ---- Badges ----------------------------------------------------------- */
+
+.badge {
+    display: inline-block;
+    padding: 1px 9px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.badge.ok      { background: var(--ok-soft);   color: var(--ok); }
+.badge.bad     { background: var(--bad-soft);  color: var(--bad); }
+.badge.warn    { background: var(--warn-soft); color: var(--warn); }
+.badge.neutral { background: var(--border);    color: var(--muted); }
+
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.muted { color: var(--muted); }
+
+/* ---- Date filter form ------------------------------------------------- */
+
+.filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px;
+}
+
+.filter label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 3px; }
+
+.filter input[type="date"] {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font: inherit;
+}
+
+/* ---- Buttons ---------------------------------------------------------- */
+
+.btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 18px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn:hover { filter: brightness(1.08); text-decoration: none; }
+.btn.secondary { background: var(--border); color: var(--text); }
+
+/* ---- Flash messages --------------------------------------------------- */
+
+.flash {
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    margin: 0 0 10px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.flash-success { background: var(--ok-soft);  border-color: var(--ok);  }
+.flash-error   { background: var(--bad-soft); border-color: var(--bad); }
+
+/* ---- Upload dropzone -------------------------------------------------- */
+
+.dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 48px 24px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+
+.dropzone.dragover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.dropzone .big { font-size: 34px; display: block; margin-bottom: 8px; }
+
+.file-list { list-style: none; padding: 0; margin: 12px 0; }
+
+.file-list li {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 12px;
+    margin-bottom: 6px;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+/* ---- SVG chart -------------------------------------------------------- */
+
+.chart svg { width: 100%; height: auto; display: block; }
+.chart .bar-ok   { fill: var(--ok); }
+.chart .bar-warn { fill: var(--warn); }
+.chart .bar-bad  { fill: var(--bad); }
+.chart .axis     { stroke: var(--border); stroke-width: 1; }
+.chart text      { fill: var(--muted); font-size: 11px; }
+
+.legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); margin-top: 8px; }
+.legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; }
+.legend .dot.ok   { background: var(--ok); }
+.legend .dot.warn { background: var(--warn); }
+.legend .dot.bad  { background: var(--bad); }
+
+/* ---- Definition list (report detail metadata) ------------------------- */
+
+.meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px 24px;
+    margin: 0;
+}
+
+.meta-grid div dt { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
+.meta-grid div dd { margin: 1px 0 0; font-weight: 600; }

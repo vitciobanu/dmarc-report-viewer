@@ -1,0 +1,14 @@
+# Credentials — never commit
+config.php
+scripts/*.local.sql
+
+# Uploaded/fetched report files stay local
+uploads/
+
+# Personal / machine-local notes and settings
+CLAUDE.local.md
+.claude/settings.local.json
+
+# OS noise
+Thumbs.db
+.DS_Store
