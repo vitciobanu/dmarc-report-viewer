@@ -66,7 +66,6 @@ a:hover { text-decoration: underline; }
 }
 
 .topbar-inner {
-    max-width: 1200px;
     margin: 0 auto;
     padding: 0 20px;
     display: flex;
@@ -92,10 +91,9 @@ a:hover { text-decoration: underline; }
 
 /* ---- Layout ----------------------------------------------------------- */
 
-.container { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
+.container { margin: 0 auto; padding: 24px 20px 60px; }
 
 .footer {
-    max-width: 1200px;
     margin: 0 auto;
     padding: 16px 20px 32px;
     color: var(--muted);
@@ -310,11 +308,22 @@ tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--
 .chart .axis     { stroke: var(--border); stroke-width: 1; }
 .chart text      { fill: var(--muted); font-size: 11px; }
 
+/* Bar segments are links to the day-records panel */
+.chart a rect { cursor: pointer; }
+.chart a:hover rect { opacity: .75; }
+.chart rect.selected { stroke: var(--text); stroke-width: 1.5; }
+
 .legend { display: flex; gap: 18px; font-size: 13px; color: var(--muted); margin-top: 8px; }
 .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; }
 .legend .dot.ok   { background: var(--ok); }
 .legend .dot.warn { background: var(--warn); }
 .legend .dot.bad  { background: var(--bad); }
+
+/* Legend entries toggle their series on/off */
+.legend a { color: var(--muted); }
+.legend a:hover { color: var(--text); text-decoration: none; }
+.legend a.off { opacity: .5; text-decoration: line-through; }
+.legend a.off .dot { background: var(--muted); }
 
 /* ---- Definition list (report detail metadata) ------------------------- */
 
@@ -325,5 +334,6 @@ tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--
     margin: 0;
 }
 
+.meta-grid div { min-width: 0; } /* let grid cells shrink below content width */
 .meta-grid div dt { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
-.meta-grid div dd { margin: 1px 0 0; font-weight: 600; }
+.meta-grid div dd { margin: 1px 0 0; font-weight: 600; overflow-wrap: anywhere; }

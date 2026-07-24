@@ -94,6 +94,69 @@ $stmt->execute($params);
 $days = $stmt->fetchAll();
 
 // ---------------------------------------------------------------------
+// Chart interactivity — no JavaScript: every click is a plain link that
+// reloads the page with extra query parameters (URLs stay shareable).
+//   ?hide=aligned,partial   series toggled off via the legend
+//   ?cat=fail&day=YYYY-MM-DD  bar segment clicked → day-records panel
+// ---------------------------------------------------------------------
+$allSeries = [
+    // url key => [SQL column alias, bar CSS class, legend label]
+    'aligned' => ['aligned', 'bar-ok',   'Fully aligned'],
+    'partial' => ['partial', 'bar-warn', 'Partial (one of SPF/DKIM)'],
+    'fail'    => ['fails',   'bar-bad',  'DMARC fail'],
+];
+
+$hidden = array_values(array_intersect(
+    explode(',', $_GET['hide'] ?? ''), array_keys($allSeries)
+));
+if (count($hidden) === count($allSeries)) {
+    $hidden = []; // hiding every series would leave an empty chart
+}
+$visible = array_diff_key($allSeries, array_flip($hidden));
+
+$cat    = in_array($_GET['cat'] ?? '', array_keys($allSeries), true) ? $_GET['cat'] : null;
+$selDay = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['day'] ?? '') ? $_GET['day'] : null;
+
+/**
+ * Build a dashboard URL that keeps the current state (date range, hidden
+ * series, selected segment) except for the given overrides. Pass null as
+ * an override value to drop that parameter.
+ */
+function dash_url(array $overrides = []): string
+{
+    global $range, $hidden, $cat, $selDay;
+    $q = array_merge([
+        'from' => $range['from'],
+        'to'   => $range['to'],
+        'hide' => implode(',', $hidden),
+        'cat'  => $cat,
+        'day'  => $selDay,
+    ], $overrides);
+    $q = array_filter($q, fn($v) => $v !== null && $v !== '');
+    return 'index.php?' . http_build_query($q);
+}
+
+// Records behind the clicked bar segment (one day, one result category).
+$dayRecords = [];
+if ($cat && $selDay) {
+    // $catCond comes from this fixed match, never from user input.
+    $catCond = match ($cat) {
+        'aligned' => "rec.eval_dkim = 'pass' AND rec.eval_spf = 'pass'",
+        'partial' => "(rec.eval_dkim = 'pass') XOR (rec.eval_spf = 'pass')",
+        'fail'    => "rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass'",
+    };
+    $stmt = $pdo->prepare("
+        SELECT rec.*, rep.org_name, rep.id AS rep_id
+        FROM records rec
+        JOIN reports rep ON rep.id = rec.report_id
+        WHERE DATE(rep.date_begin) = :day AND $catCond
+        ORDER BY rec.msg_count DESC, rec.source_ip
+    ");
+    $stmt->execute([':day' => $selDay]);
+    $dayRecords = $stmt->fetchAll();
+}
+
+// ---------------------------------------------------------------------
 // Reports in range (newest first).
 // ---------------------------------------------------------------------
 $stmt = $pdo->prepare("
@@ -191,12 +254,19 @@ require __DIR__ . '/../src/views/header.php';
     <h2>Daily volume</h2>
     <?php
     // ---- Inline SVG stacked-bar chart, generated in PHP (no JS libs). ---
+    // Every bar segment is a link (?cat=&day=) opening the records panel
+    // below; the legend links toggle series on/off (?hide=).
     $W = 1000; $H = 220;                 // viewBox size
     $padL = 46; $padR = 8; $padT = 10; $padB = 28;
     $plotW = $W - $padL - $padR;
     $plotH = $H - $padT - $padB;
 
-    $maxTotal = max(array_map(fn($d) => $d['aligned'] + $d['partial'] + $d['fails'], $days));
+    // Scale to the tallest stack of the VISIBLE series only, so hiding
+    // a dominant series re-zooms the chart onto what is left.
+    $maxTotal = max(array_map(
+        fn($d) => array_sum(array_map(fn($s) => (int)$d[$s[0]], $visible)),
+        $days
+    ));
     $maxTotal = max($maxTotal, 1);
     $n        = count($days);
     $slot     = $plotW / $n;             // horizontal space per day
@@ -216,14 +286,18 @@ require __DIR__ . '/../src/views/header.php';
             $y = $padT + $plotH; // stack upwards from the baseline
             // Draw segments in fixed order: aligned (green), partial
             // (amber), fail (red) — each shrinks the remaining baseline.
-            foreach ([['aligned', 'bar-ok'], ['partial', 'bar-warn'], ['fails', 'bar-bad']] as [$key, $class]):
-                $h = $d[$key] / $maxTotal * $plotH;
+            foreach ($visible as $key => [$col, $class]):
+                $h = $d[$col] / $maxTotal * $plotH;
                 if ($h <= 0) continue;
-                $y -= $h; ?>
-                <rect class="<?= $class ?>" x="<?= round($x, 1) ?>" y="<?= round($y, 1) ?>"
-                      width="<?= round($barW, 1) ?>" height="<?= round($h, 1) ?>">
-                    <title><?= e($d['day']) ?> — <?= number_format((int)$d[$key]) ?> <?= $key ?></title>
-                </rect>
+                $y -= $h;
+                // Highlight the segment whose records panel is open.
+                $isSel = ($cat === $key && $selDay === $d['day']); ?>
+                <a href="<?= e(dash_url(['cat' => $key, 'day' => $d['day']])) ?>">
+                    <rect class="<?= $class ?><?= $isSel ? ' selected' : '' ?>" x="<?= round($x, 1) ?>" y="<?= round($y, 1) ?>"
+                          width="<?= round($barW, 1) ?>" height="<?= round($h, 1) ?>">
+                        <title><?= e($d['day']) ?> — <?= number_format((int)$d[$col]) ?> <?= e($key) ?> (click for records)</title>
+                    </rect>
+                </a>
             <?php endforeach;
             if ($i % $labelEvery === 0): ?>
                 <text x="<?= round($x + $barW / 2, 1) ?>" y="<?= $H - 8 ?>" text-anchor="middle"><?= e(date('d M', strtotime($d['day']))) ?></text>
@@ -231,10 +305,52 @@ require __DIR__ . '/../src/views/header.php';
         endforeach; ?>
     </svg>
     <div class="legend">
-        <span><span class="dot ok"></span>Fully aligned</span>
-        <span><span class="dot warn"></span>Partial (one of SPF/DKIM)</span>
-        <span><span class="dot bad"></span>DMARC fail</span>
+        <?php foreach ($allSeries as $key => [$col, $class, $label]):
+            $isHidden  = in_array($key, $hidden, true);
+            // Clicking a legend entry adds/removes its series from ?hide=.
+            $newHidden = $isHidden
+                ? array_values(array_diff($hidden, [$key]))
+                : array_merge($hidden, [$key]); ?>
+            <a class="<?= $isHidden ? 'off' : '' ?>"
+               href="<?= e(dash_url(['hide' => implode(',', $newHidden)])) ?>"
+               title="Show/hide this series"><span class="dot <?= e(substr($class, 4)) ?>"></span><?= e($label) ?></a>
+        <?php endforeach; ?>
     </div>
+</div>
+<?php endif; ?>
+
+<?php if ($cat && $selDay): ?>
+<h2 id="day-records"><?= e($allSeries[$cat][2]) ?> records on <?= e(fmt_date($selDay)) ?> (<?= count($dayRecords) ?>)
+    <a class="muted" style="font-weight:400;font-size:14px" href="<?= e(dash_url(['cat' => null, 'day' => null])) ?>">— clear ×</a>
+</h2>
+<div class="table-wrap">
+<table>
+    <thead>
+    <tr>
+        <th>Source IP</th><th>Hostname (rDNS)</th><th class="num">Msgs</th>
+        <th>Disposition</th><th>SPF</th><th>DKIM</th>
+        <th>Header From</th><th>Report</th>
+    </tr>
+    </thead>
+    <tbody>
+    <?php if (!$dayRecords): ?>
+        <tr><td colspan="8" class="muted">No records match this day and result.</td></tr>
+    <?php endif; ?>
+    <?php foreach ($dayRecords as $rec):
+        $isFail = $rec['eval_dkim'] !== 'pass' && $rec['eval_spf'] !== 'pass'; ?>
+        <tr class="<?= $isFail ? 'row-bad' : '' ?>">
+            <td class="mono"><a href="ips.php?ip=<?= e(urlencode($rec['source_ip'])) ?>"><?= e($rec['source_ip']) ?></a></td>
+            <td class="mono"><?= e($rec['ptr_hostname'] ?? '') ?: '<span class="muted">no PTR</span>' ?></td>
+            <td class="num"><?= number_format((int)$rec['msg_count']) ?></td>
+            <td><span class="badge <?= disposition_class($rec['disposition']) ?>"><?= e($rec['disposition'] ?? '—') ?></span></td>
+            <td><span class="badge <?= result_class($rec['eval_spf']) ?>"><?= e($rec['eval_spf'] ?? '—') ?></span></td>
+            <td><span class="badge <?= result_class($rec['eval_dkim']) ?>"><?= e($rec['eval_dkim'] ?? '—') ?></span></td>
+            <td class="mono"><?= e($rec['header_from'] ?? '—') ?></td>
+            <td><a href="report.php?id=<?= (int)$rec['rep_id'] ?>"><?= e($rec['org_name']) ?> →</a></td>
+        </tr>
+    <?php endforeach; ?>
+    </tbody>
+</table>
 </div>
 <?php endif; ?>
 
