@@ -53,7 +53,14 @@ class ImapClient
     private $sock;
     private int $tagCounter = 0;
 
-    public function __construct(string $host, int $port)
+    /**
+     * @param int $maxLiteral Hard ceiling (bytes) on any single literal
+     *        the server may send us; 0 = unlimited. Defense in depth: the
+     *        caller already skips oversized messages via RFC822.SIZE, but
+     *        a lying/hostile server must not be able to make us buffer
+     *        gigabytes either.
+     */
+    public function __construct(string $host, int $port, private int $maxLiteral = 0)
     {
         // ssl:// gives us implicit TLS (IMAPS, port 993). Certificate
         // verification is ON by default — that is what we want.
@@ -108,12 +115,23 @@ class ImapClient
     private function collect(string $tag): array
     {
         $lines = [];
+        $oversized = null;
         while (true) {
             $line = $this->readLine();
 
             // A line ending in {n} announces a literal: n raw bytes follow.
             if (preg_match('/\{(\d+)\}\r?\n$/', $line, $m)) {
-                $line .= $this->readBytes((int)$m[1]);
+                $n = (int)$m[1];
+                if ($this->maxLiteral > 0 && $n > $this->maxLiteral) {
+                    // Read and DISCARD the oversized literal in small
+                    // chunks (never buffering it) so the connection stays
+                    // in sync, and fail the command once the server has
+                    // finished its response.
+                    $this->discardBytes($n);
+                    $oversized = $n;
+                } else {
+                    $line .= $this->readBytes($n);
+                }
             }
             if (str_starts_with($line, "$tag ")) {
                 // "A3 OK ..." / "A3 NO ..." / "A3 BAD ..."
@@ -121,9 +139,26 @@ class ImapClient
                 if ($status !== 'OK') {
                     throw new RuntimeException('server said: ' . trim($line));
                 }
+                if ($oversized !== null) {
+                    throw new RuntimeException(
+                        "server sent a $oversized-byte literal, over the {$this->maxLiteral}-byte safety limit"
+                    );
+                }
                 return ['status' => $status, 'lines' => $lines];
             }
             $lines[] = $line;
+        }
+    }
+
+    /** Read and throw away exactly $n bytes without buffering them. */
+    private function discardBytes(int $n): void
+    {
+        while ($n > 0) {
+            $chunk = fread($this->sock, min(65536, $n));
+            if ($chunk === false || $chunk === '') {
+                throw new RuntimeException('connection lost while discarding literal');
+            }
+            $n -= strlen($chunk);
         }
     }
 
@@ -182,18 +217,20 @@ class ImapClient
 
     /**
      * Fetch the BODYSTRUCTURE (the MIME skeleton: part types and
-     * filenames, no content) of every message in a UID range — the cheap
-     * way to decide which messages are worth downloading in full.
+     * filenames, no content) plus total message size of every message in
+     * a UID range — the cheap way to decide which messages are worth
+     * downloading in full, and to refuse oversized ones before download.
      *
-     * @return array<int, string> UID => raw structure line
+     * @return array<int, array{struct: string, size: int}> keyed by UID
      */
     public function uidFetchStructures(string $range): array
     {
-        $result  = $this->command("UID FETCH $range (BODYSTRUCTURE)");
+        $result  = $this->command("UID FETCH $range (BODYSTRUCTURE RFC822.SIZE)");
         $structs = [];
         foreach ($result['lines'] as $line) {
             if (str_contains($line, 'BODYSTRUCTURE') && preg_match('/\bUID (\d+)/', $line, $m)) {
-                $structs[(int)$m[1]] = $line;
+                $size = preg_match('/RFC822\.SIZE (\d+)/', $line, $s) ? (int)$s[1] : 0;
+                $structs[(int)$m[1]] = ['struct' => $line, 'size' => $size];
             }
         }
         return $structs;
@@ -333,8 +370,18 @@ function mime_walk(string $headers, string $body): array
 // Main
 // =====================================================================
 try {
+    // Same per-file cap as the upload page; enforced here too so a huge
+    // (or malicious) attachment cannot fill memory or disk before the
+    // parser's own decompression limit even gets a chance to run.
+    $maxBytes = (int)($cfg['max_upload_bytes'] ?? 5 * 1024 * 1024);
+
+    // A whole MESSAGE may legitimately be larger than its attachment
+    // (base64 inflates ~4/3, plus MIME headers) — allow that overhead
+    // when judging RFC822.SIZE before download.
+    $maxMsgBytes = (int)($maxBytes * 1.5) + 512 * 1024;
+
     echo "Connecting to {$imap['host']}:{$imap['port']}...\n";
-    $client = new ImapClient($imap['host'], (int)$imap['port']);
+    $client = new ImapClient($imap['host'], (int)$imap['port'], $maxMsgBytes + 65536);
     $client->login($imap['user'], $imap['pass']);
 
     // Folders to scan: an explicit list in config, or '*' (the default)
@@ -368,11 +415,6 @@ try {
         ? (json_decode((string)file_get_contents($stateFile), true) ?: [])
         : [];
 
-    // Same per-file cap as the upload page; enforced here too so a huge
-    // (or malicious) attachment cannot fill the disk before the parser's
-    // own decompression limit even gets a chance to run.
-    $maxBytes = (int)($cfg['max_upload_bytes'] ?? 5 * 1024 * 1024);
-
     // A message is worth downloading when its MIME skeleton mentions a
     // zip/gzip/xml part or a filename with a report extension.
     $candidate = '/"(zip|gzip|x-gzip|xml)"|\.(xml|gz|zip)"/i';
@@ -380,6 +422,9 @@ try {
     $inserted = $duplicates = $errors = 0;
 
     foreach ($folders as $folder) {
+      // One broken folder (un-selectable, transient server error) must
+      // not abort the whole run — log it and move on to the next one.
+      try {
         $info   = $client->select($folder);
         $fState = $state[$folder] ?? null;
         if (!$fState || $fState['uidvalidity'] !== $info['uidvalidity']) {
@@ -402,11 +447,19 @@ try {
         $structs = array_filter($structs, fn($uid) => $uid > $fState['last_uid'], ARRAY_FILTER_USE_KEY);
         echo "Scanning '$folder': " . count($structs) . " new of {$info['exists']} message(s).\n";
 
-        foreach ($structs as $uid => $struct) {
+        foreach ($structs as $uid => ['struct' => $struct, 'size' => $size]) {
             $fState['last_uid'] = $uid;
 
             if (!preg_match($candidate, $struct)) {
                 continue; // no report-shaped part — not worth downloading
+            }
+
+            // Refuse oversized messages BEFORE downloading them, so a
+            // huge attachment mailed to us can never exhaust memory.
+            if ($size > $maxMsgBytes) {
+                echo "  [$folder] UID $uid: skipped — message is $size bytes, over the size limit.\n";
+                $errors++;
+                continue;
             }
 
             $raw = $client->uidFetchMessage($uid);
@@ -445,6 +498,12 @@ try {
 
         $state[$folder] = $fState;
         file_put_contents($stateFile, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+      } catch (RuntimeException $e) {
+        // Progress for this folder is intentionally NOT saved, so the
+        // next run retries it from the same point.
+        echo "  [$folder] folder skipped: {$e->getMessage()}\n";
+        $errors++;
+      }
     }
 
     $client->close();

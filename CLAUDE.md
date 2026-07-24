@@ -68,9 +68,13 @@ distinct); keep both in sync if the user changes.
   messages are pre-filtered by BODYSTRUCTURE so only report-shaped ones
   are downloaded in full (`BODY.PEEK[]`), and only messages that yielded
   a report attachment are flagged `\Seen` — it never moves or deletes
-  mail, and non-report mail keeps its unread status. Attachments land in
-  `uploads/imap/`; oversized ones are skipped per `max_upload_bytes`,
-  same as the upload page.
+  mail, and non-report mail keeps its unread status. Size safety:
+  messages over ~1.5× `max_upload_bytes` are refused before download
+  (RFC822.SIZE), the client hard-rejects oversized literals as defense
+  in depth, and attachments over `max_upload_bytes` are skipped before
+  import. A folder that fails to scan is logged and skipped without
+  aborting the run (its state is not advanced). Attachments land in
+  `uploads/imap/`.
 - `migrations/NN_*.sql` — numbered schema migrations, applied in order by
   `scripts/init_db.php` and recorded in `schema_migrations` (that
   bookkeeping table is created by `init_db.php` itself, not by any

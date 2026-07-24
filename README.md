@@ -111,9 +111,11 @@ to leave your mailbox alone:
   read — everything else keeps its read/unread status. Nothing is ever
   moved or deleted.
 
-Attachments over `max_upload_bytes` are skipped, same as on the upload
-page. Schedule it (Windows Task Scheduler, cron) for a zero-touch
-pipeline.
+Messages larger than the size cap are refused **before** download
+(judged by their advertised size), and attachments over
+`max_upload_bytes` are skipped before import — the same limits as the
+upload page. Schedule it (Windows Task Scheduler, cron) for a
+zero-touch pipeline.
 
 ## Database schema
 
