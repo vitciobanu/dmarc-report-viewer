@@ -56,13 +56,18 @@ distinct); keep both in sync if the user changes.
 - `src/views/header.php` + `footer.php` — shared layout; pages set
   `$title`/`$active` before requiring the header.
 - `bin/imap-fetch.php` — CLI-only. Contains a minimal IMAP-over-TLS
-  client (LOGIN/SELECT/SEARCH/FETCH/STORE via raw socket — PHP 8.4 has no
-  core imap extension) and a recursive MIME attachment extractor. Fetches
-  UNSEEN by default (`--all` or `imap.unseen_only=false` to rescan) using
-  `BODY.PEEK[]`, and flags `\Seen` explicitly only after a message's
-  attachments are saved and processed — it never moves or deletes mail.
-  Attachments land in `uploads/imap/`; oversized ones are skipped per
-  `max_upload_bytes`, same as the upload page.
+  client (LOGIN/LIST/SELECT/UID FETCH/UID STORE via raw socket — PHP 8.4
+  has no core imap extension) and a recursive MIME attachment extractor.
+  Scans every folder except Trash/Drafts/Sent (or the explicit
+  `imap.folders` list). Per-folder progress lives in
+  `uploads/imap/state.json` (highest examined UID; reset when the
+  folder's UIDVALIDITY changes; `--all` rescans everything). New
+  messages are pre-filtered by BODYSTRUCTURE so only report-shaped ones
+  are downloaded in full (`BODY.PEEK[]`), and only messages that yielded
+  a report attachment are flagged `\Seen` — it never moves or deletes
+  mail, and non-report mail keeps its unread status. Attachments land in
+  `uploads/imap/`; oversized ones are skipped per `max_upload_bytes`,
+  same as the upload page.
 - `migrations/NN_*.sql` — numbered schema migrations, applied in order by
   `scripts/init_db.php` and recorded in `schema_migrations` (that
   bookkeeping table is created by `init_db.php` itself, not by any

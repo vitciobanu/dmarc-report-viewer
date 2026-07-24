@@ -32,7 +32,9 @@ dmarc-visualizer + Grafana).
 - **IMAP fetcher** (`bin/imap-fetch.php`): optionally pull report emails
   straight from a mailbox over TLS — no PHP imap extension needed (it was
   dropped from core in PHP 8.4; this speaks the protocol over a raw
-  socket). Run it by hand or from a scheduled task.
+  socket). Scans all folders, remembers what it has already examined,
+  and never disturbs non-report mail. Run it by hand or from a
+  scheduled task.
 - **Safety**: PDO prepared statements everywhere, all output escaped,
   XXE-hardened XML parsing (DOCTYPEs rejected, `LIBXML_NONET`),
   decompression size limits against zip bombs, structural validation that
@@ -76,18 +78,27 @@ Fill the `imap` block in `config.php` — use a dedicated **app password**
 IMAP-only scope), never your main password. Then:
 
 ```sh
-php bin/imap-fetch.php        # process new (unseen) messages
-php bin/imap-fetch.php --all  # rescan the whole folder
+php bin/imap-fetch.php        # process messages new since the last run
+php bin/imap-fetch.php --all  # rescan every folder from scratch
 ```
 
-By default it scans `INBOX` for unseen messages, extracts any report
-attachments, imports them, and marks each message as read only **after**
-its attachments are safely saved and imported — so an interrupted run
-leaves the pending messages unread for the next one. Attachments over
-`max_upload_bytes` are skipped, same as on the upload page. Schedule it
-(Windows Task Scheduler, cron) for a zero-touch pipeline. Tip: a mail
-filter that moves DMARC reports into a dedicated folder + `imap.folder`
-pointing at it keeps your inbox clean.
+It scans **every folder** of the account (except Trash, Drafts and
+Sent), so reports are found even when they land in the inbox or get
+filed into the wrong folder; set `imap.folders` to an explicit list to
+restrict it. It is designed to leave your mailbox alone:
+
+- Progress is remembered per folder (`uploads/imap/state.json`), so each
+  message is examined at most once across runs — `--all` starts over.
+- Only the cheap MIME structure of new messages is fetched; a full
+  message body is downloaded only when that structure looks like it
+  carries a report file.
+- Only messages that really contained a report are marked as read —
+  everything else keeps its read/unread status. Nothing is ever moved
+  or deleted.
+
+Attachments over `max_upload_bytes` are skipped, same as on the upload
+page. Schedule it (Windows Task Scheduler, cron) for a zero-touch
+pipeline.
 
 ## Database schema
 

@@ -3,18 +3,28 @@
  * IMAP fetcher: pulls DMARC report emails straight from your mailbox and
  * feeds their attachments to the same parser the upload page uses.
  *
- *     php bin/imap-fetch.php            # fetch new (unseen) messages
- *     php bin/imap-fetch.php --all      # rescan the whole folder
+ *     php bin/imap-fetch.php            # process messages new since last run
+ *     php bin/imap-fetch.php --all      # rescan every folder from scratch
  *
- * Configure the [imap] block in config.php first (host, credentials,
- * folder). Designed for a scheduled task (Windows Task Scheduler / cron).
+ * It scans EVERY folder of the account (except Trash, Drafts and Sent),
+ * so a report that lands in the inbox — or gets filed into the wrong
+ * folder — is still found. Set imap.folders in config.php to an explicit
+ * list to restrict it.
+ *
+ * Because personal folders are scanned too, the fetcher is careful not
+ * to disturb them:
+ *   - Per-folder progress (the highest examined UID) is remembered in
+ *     uploads/imap/state.json, so each message is examined at most once
+ *     across runs.
+ *   - Only the cheap MIME skeleton (BODYSTRUCTURE) of new messages is
+ *     fetched; the full body is downloaded only when that skeleton
+ *     mentions a zip/gzip/xml part or a report-looking filename.
+ *   - Only messages that actually yielded a report attachment are marked
+ *     \Seen — everything else keeps its read/unread status untouched.
  *
  * PHP 8.4 removed the imap extension from core, so this speaks the IMAP
- * protocol directly over a TLS socket — only the five commands we need:
- * LOGIN, SELECT, SEARCH, FETCH, STORE. Messages are fetched with
- * BODY.PEEK[] (which does NOT set \Seen) and explicitly flagged \Seen
- * only after their attachments are saved and imported — so a run that
- * dies halfway leaves the unprocessed messages unseen for the next run.
+ * protocol directly over a TLS socket — only the commands we need:
+ * LOGIN, LIST, SELECT, UID FETCH, UID STORE, LOGOUT.
  */
 
 if (PHP_SAPI !== 'cli') {
@@ -136,26 +146,67 @@ class ImapClient
         $this->collect($tag);
     }
 
-    /** @return int[] message sequence numbers matching the criteria */
-    public function search(string $criteria): array
+    /** @return array{name: string, flags: string[]}[] every folder on the account */
+    public function listFolders(): array
     {
-        $result = $this->command("SEARCH $criteria");
+        $result  = $this->command('LIST "" "*"');
+        $folders = [];
         foreach ($result['lines'] as $line) {
-            if (preg_match('/^\* SEARCH ?(.*)$/i', trim($line), $m)) {
-                return $m[1] === '' ? [] : array_map('intval', explode(' ', trim($m[1])));
+            // * LIST (\Flags ...) "/" "Folder name"   — the name is quoted
+            // when it contains spaces, bare otherwise.
+            if (preg_match('/^\* LIST \(([^)]*)\) "[^"]*" (?:"(.*)"|(\S+))\s*$/', trim($line), $m)) {
+                $folders[] = [
+                    'name'  => ($m[2] ?? '') !== '' ? stripslashes($m[2]) : $m[3],
+                    'flags' => preg_split('/\s+/', trim($m[1]), -1, PREG_SPLIT_NO_EMPTY),
+                ];
             }
         }
-        return [];
+        return $folders;
+    }
+
+    /** SELECT a folder; returns its message count and UIDVALIDITY. */
+    public function select(string $folder): array
+    {
+        $result = $this->command('SELECT "' . addcslashes($folder, '"\\') . '"');
+        $info = ['exists' => 0, 'uidvalidity' => 0];
+        foreach ($result['lines'] as $line) {
+            if (preg_match('/^\* (\d+) EXISTS/', $line, $m)) {
+                $info['exists'] = (int)$m[1];
+            }
+            if (preg_match('/UIDVALIDITY (\d+)/', $line, $m)) {
+                $info['uidvalidity'] = (int)$m[1];
+            }
+        }
+        return $info;
     }
 
     /**
-     * Fetch the full raw source (headers + body) of one message.
-     * BODY.PEEK[] instead of BODY[] so the message is NOT marked \Seen
-     * yet — we only flag it after successful processing (markSeen()).
+     * Fetch the BODYSTRUCTURE (the MIME skeleton: part types and
+     * filenames, no content) of every message in a UID range — the cheap
+     * way to decide which messages are worth downloading in full.
+     *
+     * @return array<int, string> UID => raw structure line
      */
-    public function fetchMessage(int $seq): string
+    public function uidFetchStructures(string $range): array
     {
-        $result = $this->command("FETCH $seq (BODY.PEEK[])");
+        $result  = $this->command("UID FETCH $range (BODYSTRUCTURE)");
+        $structs = [];
+        foreach ($result['lines'] as $line) {
+            if (str_contains($line, 'BODYSTRUCTURE') && preg_match('/\bUID (\d+)/', $line, $m)) {
+                $structs[(int)$m[1]] = $line;
+            }
+        }
+        return $structs;
+    }
+
+    /**
+     * Fetch the full raw source (headers + body) of one message by UID.
+     * BODY.PEEK[] instead of BODY[] so the message is NOT marked \Seen —
+     * only messages with an actual report attachment get flagged.
+     */
+    public function uidFetchMessage(int $uid): string
+    {
+        $result = $this->command("UID FETCH $uid (BODY.PEEK[])");
         // The message arrives as a literal appended to the "* n FETCH" line;
         // strip the protocol framing around it.
         foreach ($result['lines'] as $line) {
@@ -167,13 +218,13 @@ class ImapClient
                 return substr($line, $pos + ($line[$pos + 1] === "\r" ? 3 : 2));
             }
         }
-        throw new RuntimeException("no body returned for message $seq");
+        throw new RuntimeException("no body returned for UID $uid");
     }
 
-    /** Flag one message as \Seen so the default UNSEEN search skips it. */
-    public function markSeen(int $seq): void
+    /** Flag one message as \Seen (only done after importing a report). */
+    public function markSeen(int $uid): void
     {
-        $this->command("STORE $seq +FLAGS (\\Seen)");
+        $this->command("UID STORE $uid +FLAGS (\\Seen)");
     }
 
     public function close(): void
@@ -285,59 +336,115 @@ try {
     echo "Connecting to {$imap['host']}:{$imap['port']}...\n";
     $client = new ImapClient($imap['host'], (int)$imap['port']);
     $client->login($imap['user'], $imap['pass']);
-    $client->command('SELECT "' . addcslashes($imap['folder'], '"\\') . '"');
 
-    $criteria = (!$fetchAll && ($imap['unseen_only'] ?? true)) ? 'UNSEEN' : 'ALL';
-    $ids = $client->search($criteria);
-    echo 'Found ' . count($ids) . " message(s) matching $criteria in '{$imap['folder']}'.\n";
+    // Folders to scan: an explicit list in config, or '*' (the default)
+    // meaning every folder except Trash, Drafts and Sent — so reports
+    // filed into the wrong folder are still picked up.
+    $folderCfg = $imap['folders'] ?? '*';
+    if (is_array($folderCfg)) {
+        $folders = $folderCfg;
+    } else {
+        $folders = [];
+        foreach ($client->listFolders() as $f) {
+            $flags = array_map('strtolower', $f['flags']);
+            if (array_intersect($flags, ['\noselect', '\trash', '\drafts', '\sent'])) {
+                continue;
+            }
+            $folders[] = $f['name'];
+        }
+    }
 
-    $saveDir  = dirname(__DIR__) . '/uploads/imap';
+    $saveDir = dirname(__DIR__) . '/uploads/imap';
     if (!is_dir($saveDir)) {
         mkdir($saveDir, 0777, true);
     }
-    $inserted = $duplicates = $errors = 0;
+
+    // Per-folder progress: the highest UID already examined, so every
+    // message is inspected at most once across runs. UIDs are only
+    // meaningful for a given UIDVALIDITY — if the server changes it,
+    // the folder is rescanned from the start.
+    $stateFile = "$saveDir/state.json";
+    $state = is_file($stateFile)
+        ? (json_decode((string)file_get_contents($stateFile), true) ?: [])
+        : [];
 
     // Same per-file cap as the upload page; enforced here too so a huge
     // (or malicious) attachment cannot fill the disk before the parser's
     // own decompression limit even gets a chance to run.
     $maxBytes = (int)($cfg['max_upload_bytes'] ?? 5 * 1024 * 1024);
 
-    foreach ($ids as $seq) {
-        $raw = $client->fetchMessage($seq);
-        $attachments = mime_extract_attachments($raw);
+    // A message is worth downloading when its MIME skeleton mentions a
+    // zip/gzip/xml part or a filename with a report extension.
+    $candidate = '/"(zip|gzip|x-gzip|xml)"|\.(xml|gz|zip)"/i';
 
-        if (!$attachments) {
-            echo "  msg #$seq: no report attachment found, skipping.\n";
-            $client->markSeen($seq);
+    $inserted = $duplicates = $errors = 0;
+
+    foreach ($folders as $folder) {
+        $info   = $client->select($folder);
+        $fState = $state[$folder] ?? null;
+        if (!$fState || $fState['uidvalidity'] !== $info['uidvalidity']) {
+            $fState = ['uidvalidity' => $info['uidvalidity'], 'last_uid' => 0];
+        }
+        if ($fetchAll) {
+            $fState['last_uid'] = 0;
+        }
+
+        if ($info['exists'] === 0) {
+            $state[$folder] = $fState;
             continue;
         }
 
-        foreach ($attachments as $att) {
-            if (strlen($att['content']) > $maxBytes) {
-                echo "  msg #$seq {$att['filename']}: skipped — larger than max_upload_bytes.\n";
-                $errors++;
+        $structs = $client->uidFetchStructures(($fState['last_uid'] + 1) . ':*');
+        ksort($structs);
+
+        // An "N:*" range always returns at least the newest message, even
+        // when N is past it — keep only what we have not examined yet.
+        $structs = array_filter($structs, fn($uid) => $uid > $fState['last_uid'], ARRAY_FILTER_USE_KEY);
+        echo "Scanning '$folder': " . count($structs) . " new of {$info['exists']} message(s).\n";
+
+        foreach ($structs as $uid => $struct) {
+            $fState['last_uid'] = $uid;
+
+            if (!preg_match($candidate, $struct)) {
+                continue; // no report-shaped part — not worth downloading
+            }
+
+            $raw = $client->uidFetchMessage($uid);
+            $attachments = mime_extract_attachments($raw);
+            if (!$attachments) {
+                echo "  [$folder] UID $uid: no report attachment after all, skipping.\n";
                 continue;
             }
 
-            $safeName = date('Ymd_His_') . "msg{$seq}_"
-                      . preg_replace('/[^A-Za-z0-9._!-]/', '_', $att['filename']);
-            $path = "$saveDir/$safeName";
-            file_put_contents($path, $att['content']);
+            foreach ($attachments as $att) {
+                if (strlen($att['content']) > $maxBytes) {
+                    echo "  [$folder] UID $uid {$att['filename']}: skipped — larger than max_upload_bytes.\n";
+                    $errors++;
+                    continue;
+                }
 
-            foreach (dmarc_process_file($path, $att['filename']) as $result) {
-                echo "  msg #$seq {$result['name']}: {$result['status']} — {$result['detail']}\n";
-                match ($result['status']) {
-                    'inserted'  => $inserted++,
-                    'duplicate' => $duplicates++,
-                    default     => $errors++,
-                };
+                $safeName = date('Ymd_His_') . "uid{$uid}_"
+                          . preg_replace('/[^A-Za-z0-9._!-]/', '_', $att['filename']);
+                $path = "$saveDir/$safeName";
+                file_put_contents($path, $att['content']);
+
+                foreach (dmarc_process_file($path, $att['filename']) as $result) {
+                    echo "  [$folder] UID $uid {$result['name']}: {$result['status']} — {$result['detail']}\n";
+                    match ($result['status']) {
+                        'inserted'  => $inserted++,
+                        'duplicate' => $duplicates++,
+                        default     => $errors++,
+                    };
+                }
             }
+
+            // Mark only actual report messages as read — everything else
+            // in the folder keeps its unread status untouched.
+            $client->markSeen($uid);
         }
 
-        // Only now, with every attachment saved and processed, is the
-        // message flagged as read (the files stay in uploads/imap either
-        // way, and --all can always re-scan the whole folder).
-        $client->markSeen($seq);
+        $state[$folder] = $fState;
+        file_put_contents($stateFile, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     }
 
     $client->close();
