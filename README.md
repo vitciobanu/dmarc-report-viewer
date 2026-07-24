@@ -26,9 +26,9 @@ dmarc-visualizer + Grafana).
   URL. The date filter applies as soon as a date changes, offers quick
   presets (week / month / YTD / … appearing as your data grows), and the
   chosen range follows you across pages.
-- **Policy advisor**: tells you when your alignment rate over the
-  selected period makes it safe to move from `p=none` to `p=quarantine`
-  to `p=reject`.
+- **Policy advisor**: tells you when your DMARC pass rate (messages
+  where at least one aligned mechanism passes) over the selected period
+  makes it safe to move from `p=none` to `p=quarantine` to `p=reject`.
 - **Source-IP explorer**: every IP that sent mail as your domain, with
   volume, pass rates, reverse-DNS hostname (resolved and stored at import
   time), first/last seen, and drill-down to every record. Rows with DMARC
@@ -49,8 +49,9 @@ dmarc-visualizer + Grafana).
 
 ## Requirements
 
-- PHP ≥ 8.1 with `pdo_mysql`, `zip`, `zlib`, `simplexml` (and `openssl`
-  for the IMAP fetcher) — all bundled in normal PHP builds.
+- PHP ≥ 8.1 with `pdo_mysql`, `zip`, `zlib`, `simplexml`, `mbstring`
+  (and `openssl` for the IMAP fetcher) — all common extensions, but some
+  distros package them separately (e.g. `php-mbstring`).
 - MySQL 8 (or MariaDB).
 - Any web server that runs PHP (Apache, nginx+FPM, or just `php -S`).
 
@@ -65,7 +66,7 @@ cd dmarc-report-viewer
 #    then run it as an admin user (MySQL Workbench or the mysql CLI).
 
 # 2. App config: copy the template and fill in the same password.
-cp config.sample.php config.php
+cp config.sample.php config.php        # Windows: copy config.sample.php config.php
 
 # 3. Create the tables (idempotent migration runner).
 php scripts/init_db.php
@@ -75,8 +76,14 @@ php -S 127.0.0.1:8082 -t public
 # ...or add an Apache vhost with DocumentRoot pointing at public/.
 ```
 
-Open <http://127.0.0.1:8082>, go to **Upload**, and drop your report
-files in.
+The commands assume `php` is on your `PATH`. Open <http://127.0.0.1:8082>,
+go to **Upload**, and drop your report files in.
+
+**"Access denied" connecting to MySQL?** MySQL treats `localhost`
+(socket/named pipe) and `127.0.0.1` (TCP) as *different* grant hosts.
+The app connects over TCP to `127.0.0.1`, and `create_db.sql` creates
+the user for both hosts — if you changed `db.host` or wrote your own
+`CREATE USER`, make sure the grant host matches.
 
 ### IMAP fetching (optional)
 
@@ -90,18 +97,19 @@ php bin/imap-fetch.php --all  # rescan every folder from scratch
 ```
 
 It scans **every folder** of the account (except Trash, Drafts and
-Sent), so reports are found even when they land in the inbox or get
-filed into the wrong folder; set `imap.folders` to an explicit list to
-restrict it. It is designed to leave your mailbox alone:
+Sent, identified by their IMAP special-use flags), so reports are found
+even when they land in the inbox or get filed into the wrong folder;
+set `imap.folders` to an explicit list to restrict it. It is designed
+to leave your mailbox alone:
 
 - Progress is remembered per folder (`uploads/imap/state.json`), so each
   message is examined at most once across runs — `--all` starts over.
 - Only the cheap MIME structure of new messages is fetched; a full
   message body is downloaded only when that structure looks like it
   carries a report file.
-- Only messages that really contained a report are marked as read —
-  everything else keeps its read/unread status. Nothing is ever moved
-  or deleted.
+- Only messages that yielded a report-file attachment are marked as
+  read — everything else keeps its read/unread status. Nothing is ever
+  moved or deleted.
 
 Attachments over `max_upload_bytes` are skipped, same as on the upload
 page. Schedule it (Windows Task Scheduler, cron) for a zero-touch
@@ -109,7 +117,9 @@ pipeline.
 
 ## Database schema
 
-Two tables (created by `migrations/01_schema.sql`):
+Two data tables, created by `php scripts/init_db.php` applying
+`migrations/01_schema.sql` (the runner also keeps its own
+`schema_migrations` bookkeeping table):
 
 - **`reports`** — one row per aggregate report: reporting org, report id,
   date range, published policy (`p`, `sp`, `pct`, `adkim`, `aspf`).

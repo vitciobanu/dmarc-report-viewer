@@ -8,8 +8,8 @@ A self-hosted DMARC aggregate-report viewer: upload (or IMAP-fetch) the
 `.xml.gz`/`.zip` reports that mailbox providers email you, parse them into
 MySQL, and browse dashboards. See README.md for features and setup.
 
-**Stack:** plain PHP ≥ 8.1 (`pdo_mysql`, `zip`, `zlib`, `simplexml`;
-`openssl` for IMAP) + MySQL 8. No frameworks, no Composer, no Node, no
+**Stack:** plain PHP ≥ 8.1 (`pdo_mysql`, `zip`, `zlib`, `simplexml`,
+`mbstring`; `openssl` for IMAP) + MySQL 8. No frameworks, no Composer, no Node, no
 build step, no test suite — verification is manual via the running app.
 The target audience includes PHP beginners, so code stays simple and
 well-commented.
@@ -36,7 +36,8 @@ distinct); keep both in sync if the user changes.
   (`index.php` dashboard, `upload.php`, `report.php`, `ips.php`).
   POST handlers follow Post/Redirect/Get with flash messages
   (`flash_set()`/`flash_get()` in `src/helpers.php`). `public/assets/`
-  holds `style.css` and `app.js` (upload drag-drop; no AJAX, no libs —
+  holds `style.css` and `app.js` (upload drag-drop + date-filter
+  auto-submit; no AJAX, no libs —
   the dashboard chart is inline PHP-generated SVG, and its interactivity
   — `?hide=` series toggles, `?cat=&day=` segment drill-down — is plain
   links re-rendered server-side, not JS).
