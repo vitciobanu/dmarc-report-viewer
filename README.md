@@ -20,6 +20,10 @@ dmarc-visualizer + Grafana).
 - **Dashboard**: totals, SPF / DKIM / full-alignment pass rates, DMARC
   failure count, a daily stacked-bar timeline (inline SVG, no JS chart
   libs), report list, and top source IPs — all filtered by date range.
+  The timeline is interactive without JavaScript: click a bar segment to
+  list that day's records for that result, click a legend entry to
+  hide/show its series (the chart rescales) — every state is a shareable
+  URL.
 - **Policy advisor**: tells you when your alignment rate over the last 60
   days makes it safe to move from `p=none` to `p=quarantine` to `p=reject`.
 - **Source-IP explorer**: every IP that sent mail as your domain, with

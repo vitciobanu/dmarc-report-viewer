@@ -37,7 +37,9 @@ distinct); keep both in sync if the user changes.
   POST handlers follow Post/Redirect/Get with flash messages
   (`flash_set()`/`flash_get()` in `src/helpers.php`). `public/assets/`
   holds `style.css` and `app.js` (upload drag-drop; no AJAX, no libs —
-  the dashboard chart is inline PHP-generated SVG).
+  the dashboard chart is inline PHP-generated SVG, and its interactivity
+  — `?hide=` series toggles, `?cat=&day=` segment drill-down — is plain
+  links re-rendered server-side, not JS).
 - `src/db.php` — `Database::pdo()` is the **single PDO entry point**
   (lazy, memoized, exceptions on, real prepares). Never instantiate PDO
   elsewhere. `Database::config()` loads `config.php` (gitignored;
