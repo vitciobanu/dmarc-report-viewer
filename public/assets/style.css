@@ -219,6 +219,7 @@ tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--
     display: flex;
     flex-wrap: wrap;
     align-items: end;
+    justify-content: flex-end;
     gap: 10px;
 }
 
@@ -233,10 +234,11 @@ tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--
     font: inherit;
 }
 
-/* Quick-range preset links under the From/To inputs */
+/* Quick-range preset links, on their own row under the From/To inputs */
 .filter .presets {
     flex-basis: 100%;
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     justify-content: flex-end;
 }
