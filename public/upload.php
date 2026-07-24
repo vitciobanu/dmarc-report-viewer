@@ -18,6 +18,15 @@ $cfg = Database::config();
 // ---------------------------------------------------------------------
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
+    // Reject cross-site POSTs (e.g. a malicious page auto-submitting to
+    // this LAN app). Modern browsers send Sec-Fetch-Site; when absent
+    // (older browsers, curl) the request is allowed as before.
+    $fetchSite = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '';
+    if ($fetchSite !== '' && !in_array($fetchSite, ['same-origin', 'same-site', 'none'], true)) {
+        http_response_code(403);
+        exit('Cross-site requests are not allowed.');
+    }
+
     $files = $_FILES['files'] ?? null;
     if (!$files || !is_array($files['name']) || $files['name'][0] === '') {
         flash_set('error', 'No files were selected.');
@@ -28,7 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // uploads/ is gitignored, so it may not exist on a fresh clone.
     $uploadDir = dirname(__DIR__) . '/uploads';
     if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0777, true);
+        mkdir($uploadDir, 0755, true);
     }
 
     // PHP gives us parallel arrays (name[0], tmp_name[0], ...) — walk them.

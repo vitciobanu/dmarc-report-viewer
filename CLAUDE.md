@@ -95,6 +95,9 @@ distinct); keep both in sync if the user changes.
   Auth results are colored with `result_class()` (pass green, fail red);
   dispositions with `disposition_class()` (quarantine/reject amber — the
   receiver acting on policy is attention-worthy, not an auth failure).
+  A missing (NULL) evaluated result counts as a fail everywhere:
+  `COALESCE(..., '') <> 'pass'` in SQL, `!== 'pass'` in PHP — keep both
+  in sync.
 - Timestamps in reports are Unix epoch; they are converted to the
   configured timezone at insert time and stored as DATETIME.
 - Date filtering: `date_filter()` matches on the report's `date_begin`
