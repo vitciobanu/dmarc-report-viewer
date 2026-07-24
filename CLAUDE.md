@@ -92,10 +92,13 @@ distinct); keep both in sync if the user changes.
   receiver acting on policy is attention-worthy, not an auth failure).
 - Timestamps in reports are Unix epoch; they are converted to the
   configured timezone at insert time and stored as DATETIME.
-- Date filtering: `date_filter()` defaults to the last 90 days and
-  matches on the report's `date_begin` (window start). Exception: the
-  dashboard's policy advisor uses its own fixed 60-day window and reads
-  "current policy" from the newest report — independent of the filter.
+- Date filtering: `date_filter()` matches on the report's `date_begin`
+  (window start), remembers the last explicit range in the session so it
+  follows the user across pages, and defaults to the last 90 days. The
+  shared filter UI (From/To inputs + progressive quick presets, applied
+  on change via `app.js`) lives in `src/views/date_filter.php`. The
+  policy advisor follows the filter too; only "current policy" comes
+  from the newest report regardless of range.
 - The app ships with NO authentication (documented in README) — intended
   for localhost/LAN use only.
 - Update README.md/this file in the same commit as any behavior change.

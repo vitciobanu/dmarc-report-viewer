@@ -23,9 +23,12 @@ dmarc-visualizer + Grafana).
   The timeline is interactive without JavaScript: click a bar segment to
   list that day's records for that result, click a legend entry to
   hide/show its series (the chart rescales) — every state is a shareable
-  URL.
-- **Policy advisor**: tells you when your alignment rate over the last 60
-  days makes it safe to move from `p=none` to `p=quarantine` to `p=reject`.
+  URL. The date filter applies as soon as a date changes, offers quick
+  presets (week / month / YTD / … appearing as your data grows), and the
+  chosen range follows you across pages.
+- **Policy advisor**: tells you when your alignment rate over the
+  selected period makes it safe to move from `p=none` to `p=quarantine`
+  to `p=reject`.
 - **Source-IP explorer**: every IP that sent mail as your domain, with
   volume, pass rates, reverse-DNS hostname (resolved and stored at import
   time), first/last seen, and drill-down to every record. Rows with DMARC

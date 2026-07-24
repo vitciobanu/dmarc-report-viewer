@@ -106,17 +106,7 @@ require __DIR__ . '/../src/views/header.php';
 
 <div class="page-head">
     <h1>Source IPs</h1>
-    <form method="get" class="filter">
-        <div>
-            <label for="from">From</label>
-            <input type="date" id="from" name="from" value="<?= e($range['from']) ?>">
-        </div>
-        <div>
-            <label for="to">To</label>
-            <input type="date" id="to" name="to" value="<?= e($range['to']) ?>">
-        </div>
-        <button type="submit" class="btn secondary">Apply</button>
-    </form>
+    <?php require __DIR__ . '/../src/views/date_filter.php'; ?>
 </div>
 
 <p class="muted">
