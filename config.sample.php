@@ -45,9 +45,9 @@ return [
         'port'     => 993,               // IMAPS (TLS)
         'user'     => 'you@example.com',
         'pass'     => 'CHANGE_ME',
-        'folder'   => 'INBOX',           // folder to scan for DMARC reports
-        // Only fetch messages not seen before. Set to false to rescan
-        // everything (duplicates are skipped by the parser anyway).
-        'unseen_only' => true,
+        // Folders to scan. '*' (default) = every folder except Trash,
+        // Drafts and Sent, so reports filed into the wrong folder are
+        // still found. Or list specific ones: ['INBOX', 'Reports/DMARC'].
+        'folders'  => '*',
     ],
 ];
