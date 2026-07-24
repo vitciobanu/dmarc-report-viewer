@@ -62,3 +62,15 @@
         document.getElementById('upload-btn').disabled = input.files.length === 0;
     }
 })();
+
+/**
+ * Date filter: apply immediately when either date changes. The Apply
+ * button stays as a no-JS fallback.
+ */
+(function () {
+    'use strict';
+
+    document.querySelectorAll('form.filter input[type="date"]').forEach(function (input) {
+        input.addEventListener('change', function () { input.form.submit(); });
+    });
+})();

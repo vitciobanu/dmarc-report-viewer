@@ -2,7 +2,8 @@
 /**
  * Dashboard: summary cards, policy advisor, daily timeline chart,
  * reports list and top source IPs — all scoped to a date-range filter
- * (?from=YYYY-MM-DD&to=YYYY-MM-DD, defaults to the last 90 days).
+ * (?from=YYYY-MM-DD&to=YYYY-MM-DD, remembered in the session across
+ * pages, defaults to the last 90 days).
  *
  * The filter matches reports whose window START (date_begin) falls in
  * the range. Classification per record:
@@ -36,17 +37,20 @@ $stmt->execute($params);
 $sum = $stmt->fetch();
 
 // ---------------------------------------------------------------------
-// Policy advisor: alignment health over the last 60 days (independent of
-// the filter) + the currently published policy from the newest report.
+// Policy advisor: alignment health over the selected range + the
+// currently published policy from the newest report (the policy is
+// whatever is live NOW, so that part ignores the filter on purpose).
 // ---------------------------------------------------------------------
-$adv = $pdo->query("
+$stmt = $pdo->prepare("
     SELECT
         COALESCE(SUM(rec.msg_count), 0) AS total,
         COALESCE(SUM(CASE WHEN rec.eval_dkim <> 'pass' AND rec.eval_spf <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin >= DATE_SUB(NOW(), INTERVAL 60 DAY)
-")->fetch();
+    WHERE rep.date_begin BETWEEN :from AND :to
+");
+$stmt->execute($params);
+$adv = $stmt->fetch();
 
 $currentPolicy = $pdo->query("
     SELECT policy_p FROM reports ORDER BY date_end DESC LIMIT 1
@@ -56,21 +60,22 @@ $advisor = null; // ['state' => ok|warn|bad|neutral, 'headline' => ..., 'body' =
 if ($adv['total'] > 0) {
     $passPct = ($adv['total'] - $adv['fails']) / $adv['total'] * 100;
     $passStr = number_format($passPct, 1) . '%';
+    $period = 'between ' . fmt_date($range['from']) . ' and ' . fmt_date($range['to']);
     if ($adv['fails'] > 0 && $passPct < 90) {
         $advisor = ['state' => 'bad',
-            'headline' => "Only $passStr of mail passed DMARC in the last 60 days.",
+            'headline' => "Only $passStr of mail passed DMARC $period.",
             'body' => "Investigate the failing IPs below before tightening the policy — either a legitimate sender is misconfigured or someone is spoofing the domain."];
     } elseif ($currentPolicy === 'none' && $passPct >= 99 && $adv['total'] >= 100) {
         $advisor = ['state' => 'ok',
-            'headline' => "$passStr of mail passed DMARC in the last 60 days — you can move from p=none to p=quarantine.",
+            'headline' => "$passStr of mail passed DMARC $period — you can move from p=none to p=quarantine.",
             'body' => "Alignment is consistently healthy. Consider publishing p=quarantine (optionally with pct=25 to start), then aim for p=reject once quarantine shows no problems."];
     } elseif ($currentPolicy === 'quarantine' && $passPct >= 99.5) {
         $advisor = ['state' => 'ok',
-            'headline' => "$passStr DMARC pass under p=quarantine — p=reject looks safe.",
+            'headline' => "$passStr DMARC pass under p=quarantine $period — p=reject looks safe.",
             'body' => "Quarantine has not affected legitimate mail. Publishing p=reject completes the rollout."];
     } else {
         $advisor = ['state' => 'warn',
-            'headline' => "$passStr of mail passed DMARC in the last 60 days.",
+            'headline' => "$passStr of mail passed DMARC $period.",
             'body' => "Keep monitoring; tighten the policy once the pass rate stays above 99% (current policy: p=" . ($currentPolicy ?? '?') . ")."];
     }
 }
@@ -200,18 +205,8 @@ require __DIR__ . '/../src/views/header.php';
 
 <div class="page-head">
     <h1>Dashboard</h1>
-    <!-- Date-range filter: plain GET form so the URL stays shareable. -->
-    <form method="get" class="filter">
-        <div>
-            <label for="from">From</label>
-            <input type="date" id="from" name="from" value="<?= e($range['from']) ?>">
-        </div>
-        <div>
-            <label for="to">To</label>
-            <input type="date" id="to" name="to" value="<?= e($range['to']) ?>">
-        </div>
-        <button type="submit" class="btn secondary">Apply</button>
-    </form>
+    <!-- Shared date-range filter (inputs + quick presets). -->
+    <?php require __DIR__ . '/../src/views/date_filter.php'; ?>
 </div>
 
 <?php if ($advisor): ?>

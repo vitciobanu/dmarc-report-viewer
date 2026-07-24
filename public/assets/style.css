@@ -233,6 +233,25 @@ tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--
     font: inherit;
 }
 
+/* Quick-range preset links under the From/To inputs */
+.filter .presets {
+    flex-basis: 100%;
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.filter .presets a {
+    padding: 2px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12.5px;
+    color: var(--muted);
+}
+
+.filter .presets a:hover { color: var(--text); text-decoration: none; }
+.filter .presets a.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
 /* ---- Buttons ---------------------------------------------------------- */
 
 .btn {

@@ -89,22 +89,33 @@ function flash_get(): array
  * ------------------------------------------------------------------- */
 
 /**
- * Read the ?from= / ?to= query-string filter, defaulting to the last 90
- * days. Returns ['from' => 'YYYY-MM-DD', 'to' => 'YYYY-MM-DD'].
+ * Read the ?from= / ?to= query-string filter. An explicitly chosen range
+ * is remembered in the session, so it follows the user from page to page;
+ * without one the default is the last 90 days.
+ * Returns ['from' => 'YYYY-MM-DD', 'to' => 'YYYY-MM-DD'].
  */
 function date_filter(): array
 {
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start();
+    }
+
+    // Only accept well-formed dates; anything else falls back to the
+    // remembered range, then to the defaults.
+    $valid = fn(string $d): bool => (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $d);
+
     $from = $_GET['from'] ?? '';
     $to   = $_GET['to'] ?? '';
 
-    // Only accept well-formed dates; anything else falls back to defaults.
-    $valid = fn(string $d): bool => (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', $d);
-
-    if (!$valid($from)) {
-        $from = date('Y-m-d', strtotime('-90 days'));
+    if ($valid($from)) {
+        $_SESSION['filter_from'] = $from;
+    } else {
+        $from = $_SESSION['filter_from'] ?? date('Y-m-d', strtotime('-90 days'));
     }
-    if (!$valid($to)) {
-        $to = date('Y-m-d');
+    if ($valid($to)) {
+        $_SESSION['filter_to'] = $to;
+    } else {
+        $to = $_SESSION['filter_to'] ?? date('Y-m-d');
     }
     return ['from' => $from, 'to' => $to];
 }
