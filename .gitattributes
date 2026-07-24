@@ -1,0 +1,3 @@
+# Normalize all text files to LF in the repository (development happens on
+# Windows too — this prevents CRLF drift between contributors).
+* text=auto eol=lf
