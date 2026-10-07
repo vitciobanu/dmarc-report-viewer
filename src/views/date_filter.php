@@ -1,7 +1,9 @@
 <?php
 /**
- * Shared date-range filter: From/To inputs plus quick-range presets.
- * Pages set $range (from date_filter()) before including this partial.
+ * Shared filter form: domain selector (when several domains have
+ * reports), From/To date inputs and quick-range presets.
+ * Pages set $range (from date_filter()) and $domain (from
+ * domain_filter()) before including this partial.
  *
  * Presets appear progressively as the dataset grows: each one is only
  * shown once there is data older than the previous (smaller) preset
@@ -32,6 +34,21 @@ if ($oldest) {
 }
 ?>
 <form method="get" class="filter">
+    <?php
+    // Domain selector, only worth showing once reports exist for more
+    // than one domain. Pages set $domain (from domain_filter()); the
+    // empty option sends ?domain= which means "all domains".
+    if (count(known_domains()) > 1): ?>
+    <div>
+        <label for="domain">Domain</label>
+        <select id="domain" name="domain">
+            <option value="">All domains</option>
+            <?php foreach (known_domains() as $d): ?>
+                <option value="<?= e($d) ?>"<?= ($domain ?? null) === $d ? ' selected' : '' ?>><?= e($d) ?></option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <?php endif; ?>
     <div>
         <label for="from">From</label>
         <input type="date" id="from" name="from" value="<?= e($range['from']) ?>">

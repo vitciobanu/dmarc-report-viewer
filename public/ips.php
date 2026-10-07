@@ -2,7 +2,8 @@
 /**
  * Source IPs, two modes:
  *   ips.php            — every IP aggregated across all reports in the
- *                        date range (volume, pass rates, first/last seen)
+ *                        date range and selected domain (volume, pass
+ *                        rates, first/last seen)
  *   ips.php?ip=1.2.3.4 — drill-down: every record for that one IP
  */
 
@@ -10,7 +11,8 @@ require __DIR__ . '/../src/db.php';
 require __DIR__ . '/../src/helpers.php';
 
 $pdo   = Database::pdo();
-$range = date_filter();
+$range  = date_filter();
+$domain = domain_filter();   // null = all domains
 $ip    = trim($_GET['ip'] ?? '');
 
 $title  = 'Source IPs';
@@ -80,8 +82,10 @@ if ($ip !== '') {
 }
 
 // =====================================================================
-// Aggregated mode: every IP in the date range.
+// Aggregated mode: every IP in the date range (and selected domain).
 // =====================================================================
+$params = [':from' => $range['from'] . ' 00:00:00', ':to' => $range['to'] . ' 23:59:59'];
+$dSql   = domain_sql($domain, $params);
 $stmt = $pdo->prepare("
     SELECT rec.source_ip,
            MAX(rec.ptr_hostname)  AS ptr_hostname,
@@ -94,18 +98,18 @@ $stmt = $pdo->prepare("
            SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END) AS n_fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin BETWEEN :from AND :to
+    WHERE rep.date_begin BETWEEN :from AND :to$dSql
     GROUP BY rec.source_ip
     ORDER BY n_fails DESC, n_msgs DESC
 ");
-$stmt->execute([':from' => $range['from'] . ' 00:00:00', ':to' => $range['to'] . ' 23:59:59']);
+$stmt->execute($params);
 $ips = $stmt->fetchAll();
 
 require __DIR__ . '/../src/views/header.php';
 ?>
 
 <div class="page-head">
-    <h1>Source IPs</h1>
+    <h1>Source IPs<?php if ($domain): ?> <span class="muted mono" style="font-size:17px">· <?= e($domain) ?></span><?php endif; ?></h1>
     <?php require __DIR__ . '/../src/views/date_filter.php'; ?>
 </div>
 

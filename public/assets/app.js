@@ -64,13 +64,13 @@
 })();
 
 /**
- * Date filter: apply immediately when either date changes. The Apply
- * button stays as a no-JS fallback.
+ * Filter form: apply immediately when a date or the domain changes. The
+ * Apply button stays as a no-JS fallback.
  */
 (function () {
     'use strict';
 
-    document.querySelectorAll('form.filter input[type="date"]').forEach(function (input) {
+    document.querySelectorAll('form.filter input[type="date"], form.filter select').forEach(function (input) {
         input.addEventListener('change', function () { input.form.submit(); });
     });
 })();

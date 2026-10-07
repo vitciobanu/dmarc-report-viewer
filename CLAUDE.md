@@ -55,16 +55,25 @@ distinct); keep both in sync if the user changes.
   IMAP fetcher.
 - `src/helpers.php` — `e()` (escape ALL dynamic output with this),
   date/percent formatting, `date_filter()` (shared `?from=&to=` handling),
-  `rdns_lookup()` (memoized PTR lookup, stored on records at insert time).
+  `domain_filter()` / `domain_sql()` / `known_domains()` (shared
+  `?domain=` handling), `health_state()` (green/amber/red from the pass
+  rate, thresholds in `config.php` `health`), `rdns_lookup()` (memoized
+  PTR lookup, stored on records at insert time).
 - `src/views/header.php` + `footer.php` — shared layout; pages set
   `$title`/`$active` before requiring the header.
 - `bin/imap-fetch.php` — CLI-only. Contains a minimal IMAP-over-TLS
   client (LOGIN/LIST/SELECT/UID FETCH/UID STORE via raw socket — PHP 8.4
   has no core imap extension) and a recursive MIME attachment extractor.
-  Scans every folder except Trash/Drafts/Sent (or the explicit
-  `imap.folders` list). Per-folder progress lives in
-  `uploads/imap/state.json` (highest examined UID; reset when the
-  folder's UIDVALIDITY changes; `--all` rescans everything). New
+  Accounts: the `imap` block itself (one mailbox) or `imap.accounts` (a
+  list, which then replaces it; `imap.enabled` stays the master switch).
+  Accounts run one after another; one failing is logged, the others
+  continue, and the run exits 1. Scans every folder except
+  Trash/Drafts/Sent (or the account's explicit `folders` list).
+  Progress lives in `uploads/imap/state.json` as
+  `{"user@host": {folder: {uidvalidity, last_uid}}}` (highest examined
+  UID; reset when the folder's UIDVALIDITY changes; `--all` rescans
+  everything); the old flat single-account layout is migrated to the
+  first configured account. New
   messages are pre-filtered by BODYSTRUCTURE so only report-shaped ones
   are downloaded in full (`BODY.PEEK[]`), and only messages that yielded
   a report attachment are flagged `\Seen` — it never moves or deletes
@@ -103,10 +112,19 @@ distinct); keep both in sync if the user changes.
 - Date filtering: `date_filter()` matches on the report's `date_begin`
   (window start), remembers the last explicit range in the session so it
   follows the user across pages, and defaults to the last 90 days. The
-  shared filter UI (From/To inputs + progressive quick presets, applied
-  on change via `app.js`) lives in `src/views/date_filter.php`. The
-  policy advisor follows the filter too; only "current policy" comes
-  from the newest report regardless of range.
+  shared filter UI (domain selector when >1 domain, From/To inputs +
+  progressive quick presets, applied on change via `app.js`) lives in
+  `src/views/date_filter.php`. The policy advisor follows the filter
+  too; only "current policy" comes from the newest report regardless of
+  range.
+- Domain filtering: `domain_filter()` reads `?domain=` (empty = all
+  domains), accepts only domains present in `reports.domain`, and is
+  remembered in the session like the date range. Every query scoped by
+  the filters appends `domain_sql()` (`AND rep.domain = :domain`, so the
+  reports table must be aliased `rep`). The dashboard's per-domain
+  health cards ignore both filters on purpose (fixed `health.days`
+  window, default 30), and the policy advisor only runs when exactly
+  one domain is in scope (policy is per domain).
 - The app ships with NO authentication (documented in README) — intended
   for localhost/LAN use only.
 - Update README.md/this file in the same commit as any behavior change.
