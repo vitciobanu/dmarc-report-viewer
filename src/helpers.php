@@ -120,6 +120,84 @@ function date_filter(): array
     return ['from' => $from, 'to' => $to];
 }
 
+/* ----------------------------------------------------------------------
+ * Domain filter (for monitoring several domains in one app)
+ * ------------------------------------------------------------------- */
+
+/**
+ * Every domain that has at least one report, alphabetically. Memoized:
+ * several parts of a page ask for it.
+ */
+function known_domains(): array
+{
+    static $domains = null;
+    if ($domains === null) {
+        $domains = Database::pdo()
+            ->query('SELECT DISTINCT domain FROM reports ORDER BY domain')
+            ->fetchAll(PDO::FETCH_COLUMN);
+    }
+    return $domains;
+}
+
+/**
+ * Read the ?domain= query-string filter. Returns the selected domain, or
+ * null for "all domains".
+ *   ?domain=example.com  select that domain (remembered in the session,
+ *                        so it follows the user across pages)
+ *   ?domain=             (present but empty) back to all domains
+ *   no parameter         keep whatever was chosen before
+ * Only domains that actually appear in reports are accepted.
+ */
+function domain_filter(): ?string
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        session_start();
+    }
+
+    if (array_key_exists('domain', $_GET)) {
+        $asked = (string)$_GET['domain'];
+        $_SESSION['filter_domain'] = in_array($asked, known_domains(), true) ? $asked : null;
+    }
+
+    $domain = $_SESSION['filter_domain'] ?? null;
+    // A remembered domain whose reports were all deleted is dropped.
+    return in_array($domain, known_domains(), true) ? $domain : null;
+}
+
+/**
+ * SQL fragment restricting a query to the selected domain, for queries
+ * that alias the reports table as "rep". Adds the :domain parameter to
+ * $params when needed; returns '' (no restriction) for all domains.
+ */
+function domain_sql(?string $domain, array &$params): string
+{
+    if ($domain === null) {
+        return '';
+    }
+    $params[':domain'] = $domain;
+    return ' AND rep.domain = :domain';
+}
+
+/**
+ * Health color of a domain from its DMARC pass rate (messages where at
+ * least one aligned mechanism passed): 'ok' (green), 'warn' (amber),
+ * 'bad' (red), or 'neutral' when there is no data. Thresholds come from
+ * the health block of config.php.
+ */
+function health_state(int $total, int $fails): string
+{
+    if ($total === 0) {
+        return 'neutral';
+    }
+    $cfg     = Database::config()['health'] ?? [];
+    $passPct = ($total - $fails) / $total * 100;
+    return match (true) {
+        $passPct >= (float)($cfg['ok_pct'] ?? 99)   => 'ok',
+        $passPct >= (float)($cfg['warn_pct'] ?? 90) => 'warn',
+        default                                     => 'bad',
+    };
+}
+
 /**
  * Reverse-DNS lookup with an in-request cache, so the same IP is only
  * resolved once per upload batch. Returns null when there is no PTR

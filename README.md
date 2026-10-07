@@ -42,6 +42,13 @@ failures are highlighted.
   Files are detected by magic bytes, so misnamed attachments still work.
 - **Duplicate-safe**: reports are deduplicated by `(organization,
   report_id)`; re-uploading the same file is always a no-op.
+- **Several domains in one place**: a health card per domain at the top
+  of the dashboard — DMARC pass rate over the last 30 days, colored
+  green / amber / red, with message and failure counts, the
+  aligned / partial / fail mix, the published policy and the date of the
+  last report (a domain whose reports stopped arriving turns grey).
+  Click a card, or use the domain selector next to the date filter, to
+  scope the dashboard and the Source IPs page to that domain.
 - **Dashboard**: totals, SPF / DKIM / full-alignment pass rates, DMARC
   failure count, a daily stacked-bar timeline (inline SVG, no JS chart
   libs), report list, and top source IPs — all filtered by date range.
@@ -54,6 +61,8 @@ failures are highlighted.
 - **Policy advisor**: tells you when your DMARC pass rate (messages
   where at least one aligned mechanism passes) over the selected period
   makes it safe to move from `p=none` to `p=quarantine` to `p=reject`.
+  A policy belongs to one domain, so with several domains the advisor
+  appears once you select one.
 - **Source-IP explorer**: every IP that sent mail as your domain, with
   volume, pass rates, reverse-DNS hostname (resolved and stored at import
   time), first/last seen, and drill-down to every record. Rows with DMARC
@@ -62,7 +71,7 @@ failures are highlighted.
   (header from, envelope from/to) and the raw auth results (DKIM
   selector/domain, SPF domain, policy-override reasons).
 - **IMAP fetcher** (`bin/imap-fetch.php`): optionally pull report emails
-  straight from a mailbox over TLS — no PHP imap extension needed (it was
+  straight from one or more mailboxes over TLS — no PHP imap extension needed (it was
   dropped from core in PHP 8.4; this speaks the protocol over a raw
   socket). Scans all folders, remembers what it has already examined,
   and never disturbs non-report mail. Run it by hand or from a
@@ -114,7 +123,15 @@ the user for both hosts — if you changed `db.host` or wrote your own
 
 Fill the `imap` block in `config.php` — use a dedicated **app password**
 (most providers offer them in their security settings, ideally with
-IMAP-only scope), never your main password. Then:
+IMAP-only scope), never your main password.
+
+Reports for different domains arriving in different mailboxes? List
+them all under `imap.accounts` (see the commented example in
+`config.sample.php`); they are scanned one after another, and an
+account that fails — wrong password, server down — is logged without
+stopping the others (the run then exits with code 1 so a scheduler can
+notice). Keep the mailbox you used before first in that list: it
+inherits the progress already saved. Then:
 
 ```sh
 php bin/imap-fetch.php        # process messages new since the last run
@@ -127,8 +144,9 @@ even when they land in the inbox or get filed into the wrong folder;
 set `imap.folders` to an explicit list to restrict it. It is designed
 to leave your mailbox alone:
 
-- Progress is remembered per folder (`uploads/imap/state.json`), so each
-  message is examined at most once across runs — `--all` starts over.
+- Progress is remembered per account and folder
+  (`uploads/imap/state.json`), so each message is examined at most once
+  across runs — `--all` starts over.
 - Only the cheap MIME structure of new messages is fetched; a full
   message body is downloaded only when that structure looks like it
   carries a report file.

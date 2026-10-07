@@ -1,9 +1,15 @@
 <?php
 /**
- * Dashboard: summary cards, policy advisor, daily timeline chart,
- * reports list and top source IPs — all scoped to a date-range filter
- * (?from=YYYY-MM-DD&to=YYYY-MM-DD, remembered in the session across
- * pages, defaults to the last 90 days).
+ * Dashboard: per-domain health cards, summary cards, policy advisor,
+ * daily timeline chart, reports list and top source IPs.
+ *
+ * Everything except the health cards is scoped to the shared filters,
+ * both remembered in the session across pages:
+ *   ?from=YYYY-MM-DD&to=YYYY-MM-DD   date range (default: last 90 days)
+ *   ?domain=example.com               one domain (default: all of them)
+ * The health cards always cover a fixed recent window (health.days in
+ * config.php, default 30) so they read as "how is each domain doing
+ * right now", whatever range is being browsed.
  *
  * The filter matches reports whose window START (date_begin) falls in
  * the range. Classification per record:
@@ -17,7 +23,62 @@ require __DIR__ . '/../src/helpers.php';
 
 $pdo    = Database::pdo();
 $range  = date_filter();
+$domain = domain_filter();   // null = all domains
 $params = [':from' => $range['from'] . ' 00:00:00', ':to' => $range['to'] . ' 23:59:59'];
+// " AND rep.domain = :domain" (and the parameter) when a domain is
+// selected, '' otherwise — appended to every date-range WHERE below.
+$dSql   = domain_sql($domain, $params);
+
+// ---------------------------------------------------------------------
+// Per-domain health cards: DMARC results of each domain over the last
+// N days (fixed window, independent of the filters above).
+// ---------------------------------------------------------------------
+$healthDays = max(1, (int)(Database::config()['health']['days'] ?? 30));
+$stmt = $pdo->prepare("
+    SELECT
+        rep.domain,
+        COALESCE(SUM(rec.msg_count), 0) AS total,
+        COALESCE(SUM(CASE WHEN rec.eval_dkim = 'pass' AND rec.eval_spf = 'pass' THEN rec.msg_count ELSE 0 END), 0) AS aligned,
+        COALESCE(SUM(CASE WHEN (COALESCE(rec.eval_dkim, '') = 'pass') XOR (COALESCE(rec.eval_spf, '') = 'pass') THEN rec.msg_count ELSE 0 END), 0) AS partial,
+        COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
+    FROM reports rep
+    LEFT JOIN records rec ON rec.report_id = rep.id
+    WHERE rep.date_begin >= :since
+    GROUP BY rep.domain
+");
+$stmt->execute([':since' => date('Y-m-d 00:00:00', strtotime("-$healthDays days"))]);
+$recent = [];
+foreach ($stmt->fetchAll() as $row) {
+    $recent[$row['domain']] = $row;
+}
+
+// Policy currently published by each domain (from its newest report,
+// whatever its age) and when that newest report was.
+$latest = [];
+foreach ($pdo->query("
+    SELECT rep.domain, rep.policy_p, rep.date_end
+    FROM reports rep
+    JOIN (SELECT domain, MAX(date_end) AS last_end FROM reports GROUP BY domain) newest
+      ON newest.domain = rep.domain AND newest.last_end = rep.date_end
+") as $row) {
+    $latest[$row['domain']] = $row;
+}
+
+// One card per known domain, including domains with no recent reports
+// (shown grey, so a mailbox that stopped delivering reports stands out).
+$healthCards = [];
+foreach (known_domains() as $d) {
+    $r = $recent[$d] ?? ['total' => 0, 'aligned' => 0, 'partial' => 0, 'fails' => 0];
+    $healthCards[$d] = [
+        'total'   => (int)$r['total'],
+        'aligned' => (int)$r['aligned'],
+        'partial' => (int)$r['partial'],
+        'fails'   => (int)$r['fails'],
+        'state'   => health_state((int)$r['total'], (int)$r['fails']),
+        'policy'  => $latest[$d]['policy_p'] ?? null,
+        'last'    => $latest[$d]['date_end'] ?? null,
+    ];
+}
 
 // ---------------------------------------------------------------------
 // Summary totals over the selected range.
@@ -31,7 +92,7 @@ $stmt = $pdo->prepare("
         COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin BETWEEN :from AND :to
+    WHERE rep.date_begin BETWEEN :from AND :to$dSql
 ");
 $stmt->execute($params);
 $sum = $stmt->fetch();
@@ -39,25 +100,26 @@ $sum = $stmt->fetch();
 // ---------------------------------------------------------------------
 // Policy advisor: alignment health over the selected range + the
 // currently published policy from the newest report (the policy is
-// whatever is live NOW, so that part ignores the filter on purpose).
+// whatever is live NOW, so that part ignores the date range on purpose).
+// A policy belongs to ONE domain, so the advisor only runs when a
+// single domain is in scope: the selected one, or the only one there is.
 // ---------------------------------------------------------------------
+$advisorDomain = $domain ?? (count(known_domains()) === 1 ? known_domains()[0] : null);
 $stmt = $pdo->prepare("
     SELECT
         COALESCE(SUM(rec.msg_count), 0) AS total,
         COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin BETWEEN :from AND :to
+    WHERE rep.date_begin BETWEEN :from AND :to$dSql
 ");
 $stmt->execute($params);
 $adv = $stmt->fetch();
 
-$currentPolicy = $pdo->query("
-    SELECT policy_p FROM reports ORDER BY date_end DESC LIMIT 1
-")->fetchColumn() ?: null;
+$currentPolicy = $advisorDomain !== null ? ($latest[$advisorDomain]['policy_p'] ?? null) : null;
 
 $advisor = null; // ['state' => ok|warn|bad|neutral, 'headline' => ..., 'body' => ...]
-if ($adv['total'] > 0) {
+if ($advisorDomain !== null && $adv['total'] > 0) {
     $passPct = ($adv['total'] - $adv['fails']) / $adv['total'] * 100;
     $passStr = number_format($passPct, 1) . '%';
     $period = 'between ' . fmt_date($range['from']) . ' and ' . fmt_date($range['to']);
@@ -91,7 +153,7 @@ $stmt = $pdo->prepare("
         SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END) AS fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin BETWEEN :from AND :to
+    WHERE rep.date_begin BETWEEN :from AND :to$dSql
     GROUP BY day
     ORDER BY day
 ");
@@ -129,10 +191,11 @@ $selDay = preg_match('/^\d{4}-\d{2}-\d{2}$/', $_GET['day'] ?? '') ? $_GET['day']
  */
 function dash_url(array $overrides = []): string
 {
-    global $range, $hidden, $cat, $selDay;
+    global $range, $domain, $hidden, $cat, $selDay;
     $q = array_merge([
-        'from' => $range['from'],
-        'to'   => $range['to'],
+        'domain' => $domain,
+        'from'   => $range['from'],
+        'to'     => $range['to'],
         'hide' => implode(',', $hidden),
         'cat'  => $cat,
         'day'  => $selDay,
@@ -150,14 +213,16 @@ if ($cat && $selDay) {
         'partial' => "(COALESCE(rec.eval_dkim, '') = 'pass') XOR (COALESCE(rec.eval_spf, '') = 'pass')",
         'fail'    => "COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass'",
     };
+    $dayParams = [':day' => $selDay];
+    $dayDSql   = domain_sql($domain, $dayParams);
     $stmt = $pdo->prepare("
         SELECT rec.*, rep.org_name, rep.id AS rep_id
         FROM records rec
         JOIN reports rep ON rep.id = rec.report_id
-        WHERE DATE(rep.date_begin) = :day AND $catCond
+        WHERE DATE(rep.date_begin) = :day AND $catCond$dayDSql
         ORDER BY rec.msg_count DESC, rec.source_ip
     ");
-    $stmt->execute([':day' => $selDay]);
+    $stmt->execute($dayParams);
     $dayRecords = $stmt->fetchAll();
 }
 
@@ -171,7 +236,7 @@ $stmt = $pdo->prepare("
            COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS n_fails
     FROM reports rep
     LEFT JOIN records rec ON rec.report_id = rep.id
-    WHERE rep.date_begin BETWEEN :from AND :to
+    WHERE rep.date_begin BETWEEN :from AND :to$dSql
     GROUP BY rep.id
     ORDER BY rep.date_begin DESC
 ");
@@ -190,7 +255,7 @@ $stmt = $pdo->prepare("
            SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END) AS n_fails
     FROM records rec
     JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin BETWEEN :from AND :to
+    WHERE rep.date_begin BETWEEN :from AND :to$dSql
     GROUP BY rec.source_ip
     ORDER BY n_fails DESC, n_msgs DESC
     LIMIT 15
@@ -204,10 +269,48 @@ require __DIR__ . '/../src/views/header.php';
 ?>
 
 <div class="page-head">
-    <h1>Dashboard</h1>
-    <!-- Shared date-range filter (inputs + quick presets). -->
+    <h1>Dashboard<?php if ($domain): ?> <span class="muted mono" style="font-size:17px">· <?= e($domain) ?></span><?php endif; ?></h1>
+    <!-- Shared filter form (domain, date inputs, quick presets). -->
     <?php require __DIR__ . '/../src/views/date_filter.php'; ?>
 </div>
+
+<?php if ($healthCards): ?>
+<!-- Per-domain health over the last N days. Each card is a link that
+     filters the whole dashboard to its domain; clicking the selected
+     card again goes back to all domains. -->
+<div class="section-label">Domains · last <?= $healthDays ?> days</div>
+<div class="domain-cards">
+    <?php foreach ($healthCards as $d => $h):
+        $isSel = ($domain === $d); ?>
+        <a class="domain-card <?= e($h['state']) ?><?= $isSel ? ' selected' : '' ?>"
+           href="index.php?domain=<?= $isSel ? '' : e(urlencode($d)) ?>"
+           title="<?= $isSel ? 'Show all domains' : 'Show only this domain' ?>">
+            <div class="dc-head">
+                <span class="dc-domain"><?= e($d) ?></span>
+                <span class="badge neutral">p=<?= e($h['policy'] ?? '?') ?></span>
+            </div>
+            <?php if ($h['total'] > 0): ?>
+                <div class="value <?= e($h['state']) ?>"><?= pct($h['total'] - $h['fails'], $h['total']) ?></div>
+                <div class="sub">DMARC pass</div>
+                <?php // Proportional bar: aligned / partial / fail (same colors as the chart). ?>
+                <div class="mix" aria-hidden="true">
+                    <span class="ok"   style="width:<?= round($h['aligned'] / $h['total'] * 100, 2) ?>%"></span>
+                    <span class="warn" style="width:<?= round($h['partial'] / $h['total'] * 100, 2) ?>%"></span>
+                    <span class="bad"  style="width:<?= round($h['fails'] / $h['total'] * 100, 2) ?>%"></span>
+                </div>
+                <div class="sub">
+                    <?= number_format($h['total']) ?> messages ·
+                    <?= $h['fails'] > 0 ? '<strong class="bad">' . number_format($h['fails']) . ' failed</strong>' : 'no failures' ?>
+                </div>
+            <?php else: ?>
+                <div class="value neutral">No data</div>
+                <div class="sub">no reports in the last <?= $healthDays ?> days</div>
+            <?php endif; ?>
+            <div class="sub">Last report: <?= e(fmt_date($h['last'])) ?></div>
+        </a>
+    <?php endforeach; ?>
+</div>
+<?php endif; ?>
 
 <?php if ($advisor): ?>
     <div class="panel advisor <?= e($advisor['state']) ?>">

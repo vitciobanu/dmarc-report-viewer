@@ -1,21 +1,26 @@
 <?php
 /**
- * IMAP fetcher: pulls DMARC report emails straight from your mailbox and
- * feeds their attachments to the same parser the upload page uses.
+ * IMAP fetcher: pulls DMARC report emails straight from your mailbox(es)
+ * and feeds their attachments to the same parser the upload page uses.
  *
  *     php bin/imap-fetch.php            # process messages new since last run
  *     php bin/imap-fetch.php --all      # rescan every folder from scratch
  *
- * It scans EVERY folder of the account (except Trash, Drafts and Sent),
+ * One mailbox is configured directly in the imap block of config.php;
+ * several (e.g. one per domain you monitor) go in imap.accounts. They
+ * are scanned one after another, and an account that fails (wrong
+ * password, server down) is logged without stopping the others.
+ *
+ * It scans EVERY folder of each account (except Trash, Drafts and Sent),
  * so a report that lands in the inbox — or gets filed into the wrong
- * folder — is still found. Set imap.folders in config.php to an explicit
- * list to restrict it.
+ * folder — is still found. Set 'folders' to an explicit list to
+ * restrict it.
  *
  * Because personal folders are scanned too, the fetcher is careful not
  * to disturb them:
- *   - Per-folder progress (the highest examined UID) is remembered in
- *     uploads/imap/state.json, so each message is examined at most once
- *     across runs.
+ *   - Per-account, per-folder progress (the highest examined UID) is
+ *     remembered in uploads/imap/state.json, so each message is examined
+ *     at most once across runs.
  *   - Only the cheap MIME skeleton (BODYSTRUCTURE) of new messages is
  *     fetched; the full body is downloaded only when that skeleton
  *     mentions a zip/gzip/xml part or a report-looking filename.
@@ -365,29 +370,90 @@ function mime_walk(string $headers, string $body): array
     }
     return [['filename' => $filename ?? 'report.xml', 'content' => $content]];
 }
+// =====================================================================
+// Accounts and per-account progress
+// =====================================================================
+
+/**
+ * The list of mailboxes to scan, from config.php. Two shapes work:
+ *   - one account:  the imap block itself holds host/port/user/pass
+ *   - several:      imap.accounts is a list of such blocks
+ * Each returned account gets a 'key' ("user@host") that identifies it
+ * in the progress file, and a 'label' used in log lines.
+ */
+function imap_accounts(array $imap): array
+{
+    $multi = isset($imap['accounts']) && is_array($imap['accounts']);
+    $list  = $multi ? $imap['accounts'] : [$imap];
+
+    $accounts = [];
+    foreach ($list as $acct) {
+        // In the accounts list, one mailbox can be switched off with
+        // 'enabled' => false without deleting its settings.
+        if ($multi && array_key_exists('enabled', $acct) && !$acct['enabled']) {
+            continue;
+        }
+        if (empty($acct['host']) || empty($acct['user'])) {
+            echo "Skipping an account with no host/user in config.php.\n";
+            continue;
+        }
+        $acct['port']  = (int)($acct['port'] ?? 993);
+        $acct['key']   = $acct['user'] . '@' . $acct['host'];
+        $acct['label'] = $acct['user'];
+        $accounts[]    = $acct;
+    }
+    return $accounts;
+}
+
+/**
+ * Load uploads/imap/state.json as [account key => [folder => progress]].
+ *
+ * Older versions (single account) stored [folder => progress] directly.
+ * That flat layout is recognized and handed to the FIRST configured
+ * account — keep your original mailbox first in imap.accounts so it
+ * does not rescan everything (a rescan is harmless, only slower:
+ * duplicate reports are skipped).
+ */
+function imap_load_state(string $file, array $accounts): array
+{
+    $state = is_file($file)
+        ? (json_decode((string)file_get_contents($file), true) ?: [])
+        : [];
+
+    $first = reset($state);
+    if (is_array($first) && array_key_exists('uidvalidity', $first)) {
+        $state = [$accounts[0]['key'] => $state];
+    }
+    return $state;
+}
+
+/** Write the progress file (pretty-printed so it is easy to inspect). */
+function imap_save_state(string $file, array $state): void
+{
+    file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+}
 
 // =====================================================================
-// Main
+// Scan one account
 // =====================================================================
-try {
-    // Same per-file cap as the upload page; enforced here too so a huge
-    // (or malicious) attachment cannot fill memory or disk before the
-    // parser's own decompression limit even gets a chance to run.
-    $maxBytes = (int)($cfg['max_upload_bytes'] ?? 5 * 1024 * 1024);
 
-    // A whole MESSAGE may legitimately be larger than its attachment
-    // (base64 inflates ~4/3, plus MIME headers) — allow that overhead
-    // when judging RFC822.SIZE before download.
-    $maxMsgBytes = (int)($maxBytes * 1.5) + 512 * 1024;
-
-    echo "Connecting to {$imap['host']}:{$imap['port']}...\n";
-    $client = new ImapClient($imap['host'], (int)$imap['port'], $maxMsgBytes + 65536);
-    $client->login($imap['user'], $imap['pass']);
+/**
+ * Connect to one mailbox, scan its folders and import every new report.
+ * Progress goes into $state[$acct['key']] and is saved to disk after
+ * each folder. Returns [inserted, duplicates, errors].
+ * Throws if the account cannot be reached or logged into.
+ */
+function fetch_account(array $acct, int $acctNo, array &$state, string $stateFile,
+                       string $saveDir, bool $fetchAll, int $maxBytes, int $maxMsgBytes): array
+{
+    echo "== {$acct['label']}: connecting to {$acct['host']}:{$acct['port']}...\n";
+    $client = new ImapClient($acct['host'], $acct['port'], $maxMsgBytes + 65536);
+    $client->login($acct['user'], (string)($acct['pass'] ?? ''));
 
     // Folders to scan: an explicit list in config, or '*' (the default)
     // meaning every folder except Trash, Drafts and Sent — so reports
     // filed into the wrong folder are still picked up.
-    $folderCfg = $imap['folders'] ?? '*';
+    $folderCfg = $acct['folders'] ?? '*';
     if (is_array($folderCfg)) {
         $folders = $folderCfg;
     } else {
@@ -401,19 +467,11 @@ try {
         }
     }
 
-    $saveDir = dirname(__DIR__) . '/uploads/imap';
-    if (!is_dir($saveDir)) {
-        mkdir($saveDir, 0755, true);
-    }
-
     // Per-folder progress: the highest UID already examined, so every
     // message is inspected at most once across runs. UIDs are only
     // meaningful for a given UIDVALIDITY — if the server changes it,
     // the folder is rescanned from the start.
-    $stateFile = "$saveDir/state.json";
-    $state = is_file($stateFile)
-        ? (json_decode((string)file_get_contents($stateFile), true) ?: [])
-        : [];
+    $acctState = $state[$acct['key']] ?? [];
 
     // A message is worth downloading when its MIME skeleton mentions a
     // zip/gzip/xml part or a filename with a report extension.
@@ -426,7 +484,7 @@ try {
       // not abort the whole run — log it and move on to the next one.
       try {
         $info   = $client->select($folder);
-        $fState = $state[$folder] ?? null;
+        $fState = $acctState[$folder] ?? null;
         if (!$fState || $fState['uidvalidity'] !== $info['uidvalidity']) {
             $fState = ['uidvalidity' => $info['uidvalidity'], 'last_uid' => 0];
         }
@@ -435,7 +493,7 @@ try {
         }
 
         if ($info['exists'] === 0) {
-            $state[$folder] = $fState;
+            $acctState[$folder] = $fState;
             continue;
         }
 
@@ -476,7 +534,9 @@ try {
                     continue;
                 }
 
-                $safeName = date('Ymd_His_') . "uid{$uid}_"
+                // The "aN_" prefix (account number) keeps files from two
+                // mailboxes apart even if their UIDs and names collide.
+                $safeName = date('Ymd_His_') . "a{$acctNo}_uid{$uid}_"
                           . preg_replace('/[^A-Za-z0-9._!-]/', '_', $att['filename']);
                 $path = "$saveDir/$safeName";
                 file_put_contents($path, $att['content']);
@@ -496,8 +556,9 @@ try {
             $client->markSeen($uid);
         }
 
-        $state[$folder] = $fState;
-        file_put_contents($stateFile, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $acctState[$folder]  = $fState;
+        $state[$acct['key']] = $acctState;
+        imap_save_state($stateFile, $state);
       } catch (RuntimeException $e) {
         // Progress for this folder is intentionally NOT saved, so the
         // next run retries it from the same point.
@@ -506,8 +567,65 @@ try {
       }
     }
 
+    // Also records folders that were empty (they skipped the save above).
+    $state[$acct['key']] = $acctState;
+    imap_save_state($stateFile, $state);
+
     $client->close();
-    echo "Done: $inserted inserted, $duplicates duplicate(s) skipped, $errors error(s).\n";
+    return [$inserted, $duplicates, $errors];
+}
+
+// =====================================================================
+// Main
+// =====================================================================
+try {
+    // Same per-file cap as the upload page; enforced here too so a huge
+    // (or malicious) attachment cannot fill memory or disk before the
+    // parser's own decompression limit even gets a chance to run.
+    $maxBytes = (int)($cfg['max_upload_bytes'] ?? 5 * 1024 * 1024);
+
+    // A whole MESSAGE may legitimately be larger than its attachment
+    // (base64 inflates ~4/3, plus MIME headers) — allow that overhead
+    // when judging RFC822.SIZE before download.
+    $maxMsgBytes = (int)($maxBytes * 1.5) + 512 * 1024;
+
+    $accounts = imap_accounts($imap);
+    if (!$accounts) {
+        exit("No usable IMAP account in config.php (imap block).\n");
+    }
+
+    $saveDir = dirname(__DIR__) . '/uploads/imap';
+    if (!is_dir($saveDir)) {
+        mkdir($saveDir, 0755, true);
+    }
+    $stateFile = "$saveDir/state.json";
+    $state     = imap_load_state($stateFile, $accounts);
+
+    $inserted = $duplicates = $errors = $failedAccounts = 0;
+
+    foreach ($accounts as $i => $acct) {
+        // One account failing (wrong password, server down) must not
+        // stop the others — log it, count it, and carry on.
+        try {
+            [$ins, $dup, $err] = fetch_account(
+                $acct, $i + 1, $state, $stateFile,
+                $saveDir, $fetchAll, $maxBytes, $maxMsgBytes
+            );
+            echo "   {$acct['label']}: $ins inserted, $dup duplicate(s), $err error(s).\n";
+            $inserted   += $ins;
+            $duplicates += $dup;
+            $errors     += $err;
+        } catch (Throwable $e) {
+            fwrite(STDERR, "   {$acct['label']}: account failed — {$e->getMessage()}\n");
+            $failedAccounts++;
+        }
+    }
+
+    echo "Done: $inserted inserted, $duplicates duplicate(s) skipped, $errors error(s)"
+       . ($failedAccounts ? ", $failedAccounts account(s) failed" : '') . ".\n";
+
+    // Non-zero exit code so a scheduler can notice a failed account.
+    exit($failedAccounts ? 1 : 0);
 } catch (Throwable $e) {
     fwrite(STDERR, 'IMAP fetch failed: ' . $e->getMessage() . "\n");
     exit(1);
