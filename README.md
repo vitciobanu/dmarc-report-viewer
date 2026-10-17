@@ -81,8 +81,12 @@ failures are highlighted.
   (receivers then ignore them), no DMARC at all, no `rua=` (nobody gets
   reports), parked domains not at `p=reject` / `v=spf1 -all`, SPF
   `+all`, and DKIM selectors seen in the reports but not published.
-  Values come through the server's DNS resolver, so they can lag up to
-  one TTL after a change.
+  Lookups use the server's DNS resolver by default; set
+  `dns.resolver = 'doh'` in `config.php` to ask a public resolver over
+  HTTPS instead (Cloudflare or Google) — the answers mail receivers
+  get, even where a local NAT / virtual-switch resolver keeps serving
+  stale records for hours. DoH lookups run in parallel and fall back to
+  the system resolver if a request fails.
 - **Report list with From: domains**: each report shows which From:
   domains its records cover — a parent domain's report can also carry
   the mail of subdomains that have no record of their own.

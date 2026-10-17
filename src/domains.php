@@ -174,6 +174,15 @@ function domain_overview(): array
         array_keys(configured_domains()), array_keys($health), array_keys($weekly)
     ));
 
+    // Current policies come from DNS: fetch all the _dmarc records in
+    // parallel first (only does something with DNS-over-HTTPS).
+    $queries = [];
+    foreach ($names as $name) {
+        $queries[] = ["_dmarc.$name", 'TXT'];
+        $queries[] = ['_dmarc.' . domain_group($name), 'TXT'];
+    }
+    dns_prefetch($queries);
+
     $groups = [];
     foreach ($names as $name) {
         $h   = $health[$name] ?? null;

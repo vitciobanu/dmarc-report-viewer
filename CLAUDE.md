@@ -75,9 +75,16 @@ distinct); keep both in sync if the user changes.
   policy comes from live DNS (`dmarc_lookup()`), falling back to the
   newest report: effective policy is `p` of the sender's own record,
   else the parent's `sp` (or `p`).
-- `src/dnscheck.php` — live DNS via `dns_get_record()` (memoized):
-  `dns_txt()`, `dns_mx()`, `dns_has_key()` (follows CNAMEs by hand
-  FIRST — asking the TXT of a CNAME name took ~7 s on Windows),
+- `src/dnscheck.php` — live DNS. Every lookup goes through
+  `dns_lookup($name, 'TXT'|'MX'|'CNAME')` (per-request cache in
+  `dns_cache()`), which uses `config.php` `dns.resolver`: `system`
+  (`dns_get_record()`, via `system_query()`) or `doh` (JSON API of
+  Cloudflare/Google, `doh_url()` + `doh_parse()`; TXT chunks re-joined;
+  any failure falls back to `system_query()`). `dns_prefetch()` runs a
+  known list of lookups in parallel with `curl_multi` (each DoH request
+  is ~100 ms) — call it before loops of lookups. On top: `dns_txt()`,
+  `dns_mx()`, `dns_has_key()` (follows CNAMEs by hand FIRST — with the
+  system resolver, asking the TXT of a CNAME name took ~7 s on Windows),
   `dmarc_lookup()` (own `_dmarc` record, else the main domain's with
   `sp`; 2+ own records = none applies), `dns_check()` (findings with
   levels ok / info / warn / bad).

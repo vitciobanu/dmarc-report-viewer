@@ -76,6 +76,19 @@ return [
         'pass_pct'     => 99,
     ],
 
+    // ---- DNS lookups (DNS page, current policy on the dashboard) -------
+    // 'system' uses this server's resolver. Some local resolvers (NAT or
+    // virtual-switch DNS proxies) keep serving old answers for hours after
+    // you change a record; 'doh' asks a public resolver over HTTPS instead
+    // and gets what mail receivers see. Privacy: with 'doh' the domain
+    // names looked up are sent to that provider. A failed DoH request
+    // falls back to the system resolver.
+    'dns' => [
+        'resolver' => 'system',                              // 'system' | 'doh'
+        'doh_url'  => 'https://cloudflare-dns.com/dns-query', // or https://dns.google/resolve
+        'timeout'  => 5,                                     // seconds per request
+    ],
+
     // ---- IMAP fetcher (bin/imap-fetch.php) ------------------------------
     // Optional: pull report emails straight from your mailbox.
     // Use a dedicated app password (most providers offer them in their
