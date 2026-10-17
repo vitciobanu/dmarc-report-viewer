@@ -35,14 +35,41 @@ return [
     // false if your machine has no DNS access or lookups are slow.
     'rdns_lookup' => true,
 
-    // ---- Domain health cards (dashboard) --------------------------------
-    // One card per domain at the top of the dashboard, colored by its
-    // DMARC pass rate over the last `days` days:
-    //   >= ok_pct  green · >= warn_pct  amber · below that  red
+    // ---- Monitored domains ----------------------------------------------
+    // Optional, but recommended. Each domain gets a dashboard card even
+    // before any report arrives, and its type changes how it is judged:
+    //   'sending' — the domain sends mail: colored by DMARC pass rate.
+    //   'parked'  — it never sends mail: any mail claiming to be it is
+    //               spoofing, so "no mail" or "all blocked" is green, and
+    //               mail that PASSES DMARC is red.
+    // Subdomains are grouped under their main domain's card. A subdomain
+    // not listed here takes the type of its nearest listed parent.
+    'domains' => [
+        // 'example.com'      => 'sending',
+        // 'mail.example.com' => 'sending',
+        // 'example-old.com'  => 'parked',
+    ],
+
+    // ---- Domain cards (dashboard) ---------------------------------------
+    // Card rows are colored by their DMARC pass rate over the last `days`
+    // days:  >= ok_pct  green · >= warn_pct  amber · below that  red
     'health' => [
         'days'     => 30,
         'ok_pct'   => 99,
         'warn_pct' => 90,
+    ],
+
+    // ---- Policy advisor (dashboard) -------------------------------------
+    // Suggests the next policy step (none → quarantine → reject) for a
+    // sending domain once, over the last `weeks` weeks, its pass rate is
+    // >= pass_pct, with reports in at least `min_weeks` different weeks
+    // and at least `min_messages` messages. Parked domains are always
+    // told to use p=reject.
+    'advisor' => [
+        'weeks'        => 4,
+        'min_weeks'    => 3,
+        'min_messages' => 10,
+        'pass_pct'     => 99,
     ],
 
     // ---- IMAP fetcher (bin/imap-fetch.php) ------------------------------

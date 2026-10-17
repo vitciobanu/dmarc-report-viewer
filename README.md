@@ -42,13 +42,19 @@ failures are highlighted.
   Files are detected by magic bytes, so misnamed attachments still work.
 - **Duplicate-safe**: reports are deduplicated by `(organization,
   report_id)`; re-uploading the same file is always a no-op.
-- **Several domains in one place**: a health card per domain at the top
-  of the dashboard — DMARC pass rate over the last 30 days, colored
-  green / amber / red, with message and failure counts, the
-  aligned / partial / fail mix, the published policy and the date of the
-  last report (a domain whose reports stopped arriving turns grey).
-  Click a card, or use the domain selector next to the date filter, to
-  scope the dashboard and the Source IPs page to that domain.
+- **Several domains in one place**: a card per main domain at the top
+  of the dashboard, with one row per sending domain (subdomains are
+  grouped under their parent, keyed on the mail's From: domain). Each
+  row shows the DMARC pass rate over the last 30 days, colored
+  green / amber / red, message and failure counts, the
+  aligned / partial / fail mix, the current policy (looked up live in
+  DNS, so a change you just made shows at once) and the date of the
+  last report. List your domains in `config.php` as **sending** or
+  **parked** (never sends mail): parked domains show "No mail" /
+  "Blocked" in green, spoofing that got delivered in amber, and mail
+  that *passes* DMARC — which a parked domain should never produce — in
+  red. Click a domain, or use the domain selector next to the date
+  filter, to scope the dashboard and the Source IPs page to it.
 - **Dashboard**: totals, SPF / DKIM / full-alignment pass rates, DMARC
   failure count, a daily stacked-bar timeline (inline SVG, no JS chart
   libs), report list, and top source IPs — all filtered by date range.
@@ -58,11 +64,25 @@ failures are highlighted.
   URL. The date filter applies as soon as a date changes, offers quick
   presets (week / month / YTD / … appearing as your data grows), and the
   chosen range follows you across pages.
-- **Policy advisor**: tells you when your DMARC pass rate (messages
-  where at least one aligned mechanism passes) over the selected period
-  makes it safe to move from `p=none` to `p=quarantine` to `p=reject`.
-  A policy belongs to one domain, so with several domains the advisor
-  appears once you select one.
+- **Policy advisor** — "if it stays like this for a few weeks, tighten
+  the policy": every card row says what the next step is. Once a sending
+  domain has passed DMARC (at least one aligned mechanism) at ≥ 99% over
+  the last 4 weeks, with reports in at least 3 of them and at least 10
+  messages, it suggests `p=none` → `p=quarantine` → `p=reject`, naming
+  the record to edit (a subdomain that only inherits its parent's `sp=`
+  is told to get its own record). Before that it says how much more data
+  it needs, or to fix the failing sources first. Parked domains are told
+  to use `p=reject` right away. All thresholds are in `config.php`.
+- **DNS status page**: live SPF, DMARC, MX and DKIM records of every
+  domain, with plain-language findings — several DMARC or SPF records
+  (receivers then ignore them), no DMARC at all, no `rua=` (nobody gets
+  reports), parked domains not at `p=reject` / `v=spf1 -all`, SPF
+  `+all`, and DKIM selectors seen in the reports but not published.
+  Values come through the server's DNS resolver, so they can lag up to
+  one TTL after a change.
+- **Report list with From: domains**: each report shows which From:
+  domains its records cover — a parent domain's report can also carry
+  the mail of subdomains that have no record of their own.
 - **Source-IP explorer**: every IP that sent mail as your domain, with
   volume, pass rates, reverse-DNS hostname (resolved and stored at import
   time), first/last seen, and drill-down to every record. Rows with DMARC

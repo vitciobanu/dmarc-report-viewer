@@ -135,7 +135,8 @@ h2 { font-size: 17px; margin: 28px 0 10px; }
 .card .value.warn { color: var(--warn); }
 .card .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 
-/* ---- Per-domain health cards (dashboard top) -------------------------- */
+/* ---- Domain cards (dashboard top) ------------------------------------- */
+/* One card per main domain, one .dc-row per sending domain inside it. */
 
 .section-label {
     color: var(--muted);
@@ -147,38 +148,57 @@ h2 { font-size: 17px; margin: 28px 0 10px; }
 
 .domain-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 14px;
     margin: 18px 0;
+    align-items: start;
 }
 
-/* Each card is a link; the colored top border carries the health state. */
+/* The colored top border carries the worst state of the card's rows. */
 .domain-card {
-    display: block;
-    color: var(--text);
     background: var(--surface);
     border: 1px solid var(--border);
     border-top: 4px solid var(--muted);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
-    padding: 12px 16px 14px;
+    padding: 4px 16px;
 }
 
-.domain-card:hover { text-decoration: none; border-color: var(--accent); }
 .domain-card.ok   { border-top-color: var(--ok); }
 .domain-card.warn { border-top-color: var(--warn); }
 .domain-card.bad  { border-top-color: var(--bad); }
-.domain-card.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.domain-card .dc-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.domain-card .dc-domain { font-weight: 700; overflow-wrap: anywhere; }
-.domain-card .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
-.domain-card .value.ok      { color: var(--ok); }
-.domain-card .value.warn    { color: var(--warn); }
-.domain-card .value.bad     { color: var(--bad); }
-.domain-card .value.neutral { color: var(--muted); font-size: 20px; }
+.dc-row { padding: 10px 0 12px; }
+.dc-row + .dc-row { border-top: 1px dashed var(--border); }
+.dc-row.selected { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+.dc-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 8px; }
+.dc-domain { font-weight: 700; overflow-wrap: break-word; color: var(--text); }
+.dc-row:not(.main) .dc-domain { font-weight: 600; font-size: 14px; }
+a.dc-domain:hover { color: var(--accent); }
+
+.dc-value { font-size: 24px; font-weight: 700; margin-top: 2px; }
+.dc-row:not(.main) .dc-value { font-size: 19px; }
+.dc-value.ok      { color: var(--ok); }
+.dc-value.warn    { color: var(--warn); }
+.dc-value.bad     { color: var(--bad); }
+.dc-value.neutral { color: var(--muted); }
+
 .domain-card .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
-.domain-card strong.bad { color: var(--bad); }
+
+/* Next policy step, colored by how actionable it is. */
+.advice {
+    font-size: 12.5px;
+    margin-top: 6px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    background: var(--border);
+    color: var(--muted);
+}
+.advice.ready { background: var(--ok-soft);   color: var(--ok); }
+.advice.ok    { background: var(--ok-soft);   color: var(--ok); }
+.advice.fix   { background: var(--bad-soft);  color: var(--bad); }
+.advice.wait  { background: var(--warn-soft); color: var(--warn); }
 
 /* Thin proportional bar: aligned / partial / fail share of messages */
 .mix {
@@ -417,3 +437,27 @@ tr.row-bad:hover td { background: color-mix(in srgb, var(--bad-soft) 85%, var(--
 .meta-grid div { min-width: 0; } /* let grid cells shrink below content width */
 .meta-grid div dt { color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
 .meta-grid div dd { margin: 1px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+
+/* ---- DNS status page --------------------------------------------------- */
+
+/* Long record values and findings wrap instead of widening the table. */
+/* Same column widths in every per-domain table, so they line up. */
+.dns-table { table-layout: fixed; min-width: 900px; }
+.dns-table th:nth-child(1) { width: 15%; }
+.dns-table th:nth-child(2) { width: 23%; }
+.dns-table th:nth-child(3) { width: 19%; }
+.dns-table th:nth-child(4) { width: 13%; }
+.dns-table th:nth-child(5) { width: 8%; }
+.dns-table th:nth-child(6) { width: 22%; }
+.dns-table td { white-space: normal; overflow-wrap: anywhere; }
+.dns-table td { vertical-align: top; }
+.small { font-size: 12px; }
+
+.findings { margin: 0; padding-left: 0; list-style: none; font-size: 13px; }
+.findings li { padding-left: 16px; position: relative; margin-bottom: 3px; }
+.findings li::before { content: "●"; position: absolute; left: 0; font-size: 10px; top: 3px; }
+.findings li.ok::before   { color: var(--ok); }
+.findings li.info::before { color: var(--muted); }
+.findings li.warn::before { color: var(--warn); }
+.findings li.bad::before  { color: var(--bad); }
+.findings li.bad  { color: var(--bad); }

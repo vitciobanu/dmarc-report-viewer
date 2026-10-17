@@ -33,7 +33,8 @@ distinct); keep both in sync if the user changes.
 ## Architecture
 
 - `public/` — one self-contained controller+view file per page
-  (`index.php` dashboard, `upload.php`, `report.php`, `ips.php`).
+  (`index.php` dashboard, `upload.php`, `report.php`, `ips.php`,
+  `dns.php` live DNS status).
   POST handlers follow Post/Redirect/Get with flash messages
   (`flash_set()`/`flash_get()` in `src/helpers.php`). `public/assets/`
   holds `style.css` and `app.js` (upload drag-drop + date-filter
@@ -59,6 +60,24 @@ distinct); keep both in sync if the user changes.
   `?domain=` handling), `health_state()` (green/amber/red from the pass
   rate, thresholds in `config.php` `health`), `rdns_lookup()` (memoized
   PTR lookup, stored on records at insert time).
+- `src/domains.php` — the dashboard's domain model. Card rows are keyed
+  on the **sender** (`LOWER(COALESCE(NULLIF(rec.header_from,''),
+  rep.domain))`), grouped by `domain_group()` (topmost domain listed in
+  `config.php` `domains`, else the last two labels). `domain_type()`:
+  own configured type, else nearest configured parent's, else
+  `sending`. `sender_state()` colors a row (parked: no mail / all
+  blocked = ok, delivered spoofing = warn, any DMARC pass = bad);
+  `policy_advice()` gives the next step from weekly buckets over
+  `advisor.weeks` (levels ok / ready / wait / fix / none). The current
+  policy comes from live DNS (`dmarc_lookup()`), falling back to the
+  newest report: effective policy is `p` of the sender's own record,
+  else the parent's `sp` (or `p`).
+- `src/dnscheck.php` — live DNS via `dns_get_record()` (memoized):
+  `dns_txt()`, `dns_mx()`, `dns_has_key()` (follows CNAMEs by hand
+  FIRST — asking the TXT of a CNAME name took ~7 s on Windows),
+  `dmarc_lookup()` (own `_dmarc` record, else the main domain's with
+  `sp`; 2+ own records = none applies), `dns_check()` (findings with
+  levels ok / info / warn / bad).
 - `src/views/header.php` + `footer.php` — shared layout; pages set
   `$title`/`$active` before requiring the header.
 - `bin/imap-fetch.php` — CLI-only. Contains a minimal IMAP-over-TLS
@@ -114,17 +133,17 @@ distinct); keep both in sync if the user changes.
   follows the user across pages, and defaults to the last 90 days. The
   shared filter UI (domain selector when >1 domain, From/To inputs +
   progressive quick presets, applied on change via `app.js`) lives in
-  `src/views/date_filter.php`. The policy advisor follows the filter
-  too; only "current policy" comes from the newest report regardless of
-  range.
+  `src/views/date_filter.php`. The domain cards and the policy advisor
+  do NOT follow it (fixed windows, see below).
 - Domain filtering: `domain_filter()` reads `?domain=` (empty = all
   domains), accepts only domains present in `reports.domain`, and is
   remembered in the session like the date range. Every query scoped by
   the filters appends `domain_sql()` (`AND rep.domain = :domain`, so the
-  reports table must be aliased `rep`). The dashboard's per-domain
-  health cards ignore both filters on purpose (fixed `health.days`
-  window, default 30), and the policy advisor only runs when exactly
-  one domain is in scope (policy is per domain).
+  reports table must be aliased `rep`). The dashboard's domain cards
+  ignore both filters on purpose (fixed `health.days` window, default
+  30; advice over `advisor.weeks`, default 4), and the policy advisor
+  panel shows the selected domain's card-row advice (same function, so
+  they never disagree).
 - The app ships with NO authentication (documented in README) — intended
   for localhost/LAN use only.
 - Update README.md/this file in the same commit as any behavior change.
