@@ -53,7 +53,10 @@ failures are highlighted.
   **parked** (never sends mail): parked domains show "No mail" /
   "Blocked" in green, spoofing that got delivered in amber, and mail
   that *passes* DMARC — which a parked domain should never produce — in
-  red. Click a domain, or use the domain selector next to the date
+  red. A parked domain with nothing to report (no mail, `p=reject` in
+  place) gets no card — just a mention in one line under the cards — and
+  reappears by itself as soon as spoofing shows up or its policy
+  weakens. Click a domain, or use the domain selector next to the date
   filter, to scope the dashboard and the Source IPs page to it.
 - **Dashboard**: totals, SPF / DKIM / full-alignment pass rates, DMARC
   failure count, a daily stacked-bar timeline (inline SVG, no JS chart

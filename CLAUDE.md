@@ -68,7 +68,10 @@ distinct); keep both in sync if the user changes.
   `sending`. `sender_state()` colors a row (parked: no mail / all
   blocked = ok, delivered spoofing = warn, any DMARC pass = bad);
   `policy_advice()` gives the next step from weekly buckets over
-  `advisor.weeks` (levels ok / ready / wait / fix / none). The current
+  `advisor.weeks` (levels ok / ready / wait / fix / none).
+  `hide_quiet_parked()` drops parked rows with no mail and advice `ok`
+  (p=reject in place) from the cards unless
+  `health.show_quiet_parked`; the advisor panel still sees them. The current
   policy comes from live DNS (`dmarc_lookup()`), falling back to the
   newest report: effective policy is `p` of the sender's own record,
   else the parent's `sp` (or `p`).
