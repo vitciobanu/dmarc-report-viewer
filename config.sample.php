@@ -53,10 +53,14 @@ return [
     // ---- Domain cards (dashboard) ---------------------------------------
     // Card rows are colored by their DMARC pass rate over the last `days`
     // days:  >= ok_pct  green · >= warn_pct  amber · below that  red
+    // Parked domains with no mail in that window and p=reject in place
+    // are hidden (listed in one line instead) unless show_quiet_parked
+    // is true; they reappear by themselves if anything happens.
     'health' => [
-        'days'     => 30,
-        'ok_pct'   => 99,
-        'warn_pct' => 90,
+        'days'              => 30,
+        'ok_pct'            => 99,
+        'warn_pct'          => 90,
+        'show_quiet_parked' => false,
     ],
 
     // ---- Policy advisor (dashboard) -------------------------------------

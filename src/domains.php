@@ -232,6 +232,48 @@ function domain_overview(): array
 }
 
 /**
+ * Split the overview into what the dashboard shows and the "quiet"
+ * parked domains it hides: parked, no mail at all in the health window
+ * and p=reject in place — the normal state of a domain that never sends
+ * mail, so a card for it would only be noise. Such a row comes back by
+ * itself as soon as something needs attention (spoofed mail in reports,
+ * mail passing DMARC, or a policy weaker than reject).
+ * Set health.show_quiet_parked = true in config.php to always show them.
+ *
+ * Returns [overview without the quiet rows, list of hidden names]. A card
+ * left without rows is dropped; card colors are recomputed.
+ */
+function hide_quiet_parked(array $overview): array
+{
+    if (Database::config()['health']['show_quiet_parked'] ?? false) {
+        return [$overview, []];
+    }
+
+    $hidden = [];
+    foreach ($overview as $g => $group) {
+        foreach ($group['rows'] as $name => $row) {
+            $quiet = $row['type'] === 'parked' && $row['total'] === 0 && $row['advice']['level'] === 'ok';
+            if ($quiet) {
+                $hidden[] = $name;
+                unset($overview[$g]['rows'][$name]);
+            }
+        }
+        if (!$overview[$g]['rows']) {
+            unset($overview[$g]);
+            continue;
+        }
+        $overview[$g]['state'] = 'neutral';
+        foreach ($overview[$g]['rows'] as $row) {
+            if (state_rank($row['state']) > state_rank($overview[$g]['state'])) {
+                $overview[$g]['state'] = $row['state'];
+            }
+        }
+    }
+    sort($hidden);
+    return [$overview, $hidden];
+}
+
+/**
  * Color + headline value + one-line detail of a sender over the health
  * window. Returns [state, value, detail].
  *

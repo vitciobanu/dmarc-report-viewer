@@ -40,6 +40,14 @@ $dSql   = domain_sql($domain, $params);
 // ---------------------------------------------------------------------
 $healthDays = max(1, (int)(Database::config()['health']['days'] ?? 30));
 $overview   = domain_overview();
+// Rows for the advisor panel are taken BEFORE hiding, so a selected
+// parked domain still gets its advice.
+$allRows = []; // every row of every card, keyed by domain name
+foreach ($overview as $group) {
+    $allRows += $group['rows'];
+}
+// Quiet parked domains (no mail, p=reject) are hidden from the cards.
+[$overview, $quietParked] = hide_quiet_parked($overview);
 
 // ---------------------------------------------------------------------
 // Summary totals over the selected range.
@@ -63,10 +71,6 @@ $sum = $stmt->fetch();
 // one, or the only one there is. Same logic (and window) as the card
 // rows, so the two never disagree.
 // ---------------------------------------------------------------------
-$allRows = []; // every row of every card, keyed by domain name
-foreach ($overview as $group) {
-    $allRows += $group['rows'];
-}
 $advisorRow = null;
 if ($domain !== null) {
     $advisorRow = $allRows[strtolower($domain)] ?? null;
@@ -252,6 +256,15 @@ require __DIR__ . '/../src/views/header.php';
         </div>
     <?php endforeach; ?>
 </div>
+<?php endif; ?>
+
+<?php if ($quietParked): ?>
+<!-- Parked domains with nothing to report are not shown as cards. -->
+<p class="muted small">
+    Quiet parked domains (no mail, p=reject in place):
+    <span class="mono"><?= e(implode(', ', $quietParked)) ?></span> —
+    they reappear here if anything happens. <a href="dns.php">DNS status →</a>
+</p>
 <?php endif; ?>
 
 <?php if ($advisorRow):
