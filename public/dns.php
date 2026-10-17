@@ -10,8 +10,8 @@
  *     (real senders — spoofed random subdomains are left out).
  * DKIM selectors to check are the ones seen in the reports.
  *
- * Lookups use this server's DNS resolver, so right after a change a
- * value can be up to one TTL old (the same delay mail receivers have).
+ * Lookups use the resolver chosen in config.php (dns.resolver: the
+ * system one, or DNS-over-HTTPS), see src/dnscheck.php.
  */
 
 require __DIR__ . '/../src/db.php';
@@ -50,6 +50,29 @@ foreach ($pdo->query("
     $selectors[$r['d']][] = $r['sel'];
 }
 
+// ---- With DNS-over-HTTPS, fetch every record we are going to need in
+// parallel first (two rounds: DKIM keys often sit behind a CNAME whose
+// target is only known after the first round). The checks below then
+// read from the cache. Nothing happens with the system resolver.
+$round1 = [];
+foreach ($names as $name) {
+    array_push($round1, [$name, 'TXT'], [$name, 'MX'], ["_dmarc.$name", 'TXT'],
+               ['_dmarc.' . domain_group($name), 'TXT']);
+    foreach ($selectors[$name] ?? [] as $sel) {
+        $round1[] = ["$sel._domainkey.$name", 'CNAME'];
+    }
+}
+dns_prefetch($round1);
+$round2 = [];
+foreach ($names as $name) {
+    foreach ($selectors[$name] ?? [] as $sel) {
+        $cname  = dns_lookup("$sel._domainkey.$name", 'CNAME');
+        $target = $cname[0]['value'] ?? "$sel._domainkey.$name";
+        array_push($round2, [$target, 'TXT'], [$target, 'CNAME']); // dns_has_key() checks both
+    }
+}
+dns_prefetch($round2);
+
 // ---- Run the checks, grouped by main domain (same grouping as the dashboard).
 $groups = [];
 foreach ($names as $name) {
@@ -68,9 +91,16 @@ require __DIR__ . '/../src/views/header.php';
 
 <h1>DNS status</h1>
 <p class="muted">
-    Live SPF, DMARC, MX and DKIM records of your domains, checked through
-    this server's DNS resolver — right after a change, a value can be up
-    to one TTL old. Domain types (sending / parked) come from the
+    Live SPF, DMARC, MX and DKIM records of your domains, looked up
+    <?php if (dns_resolver() === 'doh'): ?>
+        over HTTPS at <span class="mono"><?= e(parse_url(Database::config()['dns']['doh_url'] ?? 'https://cloudflare-dns.com', PHP_URL_HOST)) ?></span>
+        (what mail receivers see; right after a change a value can still be up to one TTL old).
+    <?php else: ?>
+        through this server's DNS resolver — right after a change, a value
+        can be up to one TTL old (or longer behind some NAT resolvers: see
+        <span class="mono">dns.resolver</span> in config.php).
+    <?php endif; ?>
+    Domain types (sending / parked) come from the
     <span class="mono">domains</span> map in config.php.
 </p>
 
