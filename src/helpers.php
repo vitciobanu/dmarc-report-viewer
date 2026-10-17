@@ -48,6 +48,15 @@ function pct(int|float $part, int|float $total): string
 }
 
 /**
+ * "1 message", "3 messages", "1,250 messages": a formatted count with the
+ * word in singular or plural. $plural defaults to $word + "s".
+ */
+function plural(int $n, string $word, ?string $plural = null): string
+{
+    return number_format($n) . ' ' . ($n === 1 ? $word : ($plural ?? $word . 's'));
+}
+
+/**
  * Convert a Unix timestamp (as found in DMARC reports) to a DATETIME
  * string in the configured timezone, ready to INSERT into MySQL.
  */

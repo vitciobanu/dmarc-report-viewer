@@ -1,15 +1,17 @@
 <?php
 /**
- * Dashboard: per-domain health cards, summary cards, policy advisor,
+ * Dashboard: domain cards (one per main domain, one row per sending
+ * domain, with the next policy step), policy advisor, summary cards,
  * daily timeline chart, reports list and top source IPs.
  *
- * Everything except the health cards is scoped to the shared filters,
- * both remembered in the session across pages:
+ * Everything except the domain cards and the advisor is scoped to the
+ * shared filters, both remembered in the session across pages:
  *   ?from=YYYY-MM-DD&to=YYYY-MM-DD   date range (default: last 90 days)
  *   ?domain=example.com               one domain (default: all of them)
- * The health cards always cover a fixed recent window (health.days in
- * config.php, default 30) so they read as "how is each domain doing
- * right now", whatever range is being browsed.
+ * The cards always cover a fixed recent window (health.days in
+ * config.php, default 30) and the advice the last advisor.weeks weeks, so
+ * they read as "how is each domain doing right now", whatever range is
+ * being browsed. Their logic lives in src/domains.php.
  *
  * The filter matches reports whose window START (date_begin) falls in
  * the range. Classification per record:
@@ -20,6 +22,8 @@
 
 require __DIR__ . '/../src/db.php';
 require __DIR__ . '/../src/helpers.php';
+require __DIR__ . '/../src/domains.php';
+require __DIR__ . '/../src/dnscheck.php';
 
 $pdo    = Database::pdo();
 $range  = date_filter();
@@ -30,55 +34,12 @@ $params = [':from' => $range['from'] . ' 00:00:00', ':to' => $range['to'] . ' 23
 $dSql   = domain_sql($domain, $params);
 
 // ---------------------------------------------------------------------
-// Per-domain health cards: DMARC results of each domain over the last
-// N days (fixed window, independent of the filters above).
+// Domain cards: one per main domain, one row per sending domain, with
+// state + next policy step (see src/domains.php). Fixed recent window,
+// independent of the filters above.
 // ---------------------------------------------------------------------
 $healthDays = max(1, (int)(Database::config()['health']['days'] ?? 30));
-$stmt = $pdo->prepare("
-    SELECT
-        rep.domain,
-        COALESCE(SUM(rec.msg_count), 0) AS total,
-        COALESCE(SUM(CASE WHEN rec.eval_dkim = 'pass' AND rec.eval_spf = 'pass' THEN rec.msg_count ELSE 0 END), 0) AS aligned,
-        COALESCE(SUM(CASE WHEN (COALESCE(rec.eval_dkim, '') = 'pass') XOR (COALESCE(rec.eval_spf, '') = 'pass') THEN rec.msg_count ELSE 0 END), 0) AS partial,
-        COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
-    FROM reports rep
-    LEFT JOIN records rec ON rec.report_id = rep.id
-    WHERE rep.date_begin >= :since
-    GROUP BY rep.domain
-");
-$stmt->execute([':since' => date('Y-m-d 00:00:00', strtotime("-$healthDays days"))]);
-$recent = [];
-foreach ($stmt->fetchAll() as $row) {
-    $recent[$row['domain']] = $row;
-}
-
-// Policy currently published by each domain (from its newest report,
-// whatever its age) and when that newest report was.
-$latest = [];
-foreach ($pdo->query("
-    SELECT rep.domain, rep.policy_p, rep.date_end
-    FROM reports rep
-    JOIN (SELECT domain, MAX(date_end) AS last_end FROM reports GROUP BY domain) newest
-      ON newest.domain = rep.domain AND newest.last_end = rep.date_end
-") as $row) {
-    $latest[$row['domain']] = $row;
-}
-
-// One card per known domain, including domains with no recent reports
-// (shown grey, so a mailbox that stopped delivering reports stands out).
-$healthCards = [];
-foreach (known_domains() as $d) {
-    $r = $recent[$d] ?? ['total' => 0, 'aligned' => 0, 'partial' => 0, 'fails' => 0];
-    $healthCards[$d] = [
-        'total'   => (int)$r['total'],
-        'aligned' => (int)$r['aligned'],
-        'partial' => (int)$r['partial'],
-        'fails'   => (int)$r['fails'],
-        'state'   => health_state((int)$r['total'], (int)$r['fails']),
-        'policy'  => $latest[$d]['policy_p'] ?? null,
-        'last'    => $latest[$d]['date_end'] ?? null,
-    ];
-}
+$overview   = domain_overview();
 
 // ---------------------------------------------------------------------
 // Summary totals over the selected range.
@@ -98,48 +59,19 @@ $stmt->execute($params);
 $sum = $stmt->fetch();
 
 // ---------------------------------------------------------------------
-// Policy advisor: alignment health over the selected range + the
-// currently published policy from the newest report (the policy is
-// whatever is live NOW, so that part ignores the date range on purpose).
-// A policy belongs to ONE domain, so the advisor only runs when a
-// single domain is in scope: the selected one, or the only one there is.
+// Policy advisor: the next policy step for ONE domain — the selected
+// one, or the only one there is. Same logic (and window) as the card
+// rows, so the two never disagree.
 // ---------------------------------------------------------------------
-$advisorDomain = $domain ?? (count(known_domains()) === 1 ? known_domains()[0] : null);
-$stmt = $pdo->prepare("
-    SELECT
-        COALESCE(SUM(rec.msg_count), 0) AS total,
-        COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS fails
-    FROM records rec
-    JOIN reports rep ON rep.id = rec.report_id
-    WHERE rep.date_begin BETWEEN :from AND :to$dSql
-");
-$stmt->execute($params);
-$adv = $stmt->fetch();
-
-$currentPolicy = $advisorDomain !== null ? ($latest[$advisorDomain]['policy_p'] ?? null) : null;
-
-$advisor = null; // ['state' => ok|warn|bad|neutral, 'headline' => ..., 'body' => ...]
-if ($advisorDomain !== null && $adv['total'] > 0) {
-    $passPct = ($adv['total'] - $adv['fails']) / $adv['total'] * 100;
-    $passStr = number_format($passPct, 1) . '%';
-    $period = 'between ' . fmt_date($range['from']) . ' and ' . fmt_date($range['to']);
-    if ($adv['fails'] > 0 && $passPct < 90) {
-        $advisor = ['state' => 'bad',
-            'headline' => "Only $passStr of mail passed DMARC $period.",
-            'body' => "Investigate the failing IPs below before tightening the policy — either a legitimate sender is misconfigured or someone is spoofing the domain."];
-    } elseif ($currentPolicy === 'none' && $passPct >= 99 && $adv['total'] >= 100) {
-        $advisor = ['state' => 'ok',
-            'headline' => "$passStr of mail passed DMARC $period — you can move from p=none to p=quarantine.",
-            'body' => "Alignment is consistently healthy. Consider publishing p=quarantine (optionally with pct=25 to start), then aim for p=reject once quarantine shows no problems."];
-    } elseif ($currentPolicy === 'quarantine' && $passPct >= 99.5) {
-        $advisor = ['state' => 'ok',
-            'headline' => "$passStr DMARC pass under p=quarantine $period — p=reject looks safe.",
-            'body' => "Quarantine has not affected legitimate mail. Publishing p=reject completes the rollout."];
-    } else {
-        $advisor = ['state' => 'warn',
-            'headline' => "$passStr of mail passed DMARC $period.",
-            'body' => "Keep monitoring; tighten the policy once the pass rate stays above 99% (current policy: p=" . ($currentPolicy ?? '?') . ")."];
-    }
+$allRows = []; // every row of every card, keyed by domain name
+foreach ($overview as $group) {
+    $allRows += $group['rows'];
+}
+$advisorRow = null;
+if ($domain !== null) {
+    $advisorRow = $allRows[strtolower($domain)] ?? null;
+} elseif (count($allRows) === 1) {
+    $advisorRow = reset($allRows);
 }
 
 // ---------------------------------------------------------------------
@@ -231,6 +163,9 @@ if ($cat && $selDay) {
 // ---------------------------------------------------------------------
 $stmt = $pdo->prepare("
     SELECT rep.*,
+           -- the From: domains seen in this report (a parent's report can
+           -- also carry mail of subdomains without their own record)
+           GROUP_CONCAT(DISTINCT LOWER(rec.header_from) ORDER BY LOWER(rec.header_from) SEPARATOR ', ') AS header_froms,
            COUNT(rec.id)                AS n_records,
            COALESCE(SUM(rec.msg_count), 0) AS n_msgs,
            COALESCE(SUM(CASE WHEN COALESCE(rec.eval_dkim, '') <> 'pass' AND COALESCE(rec.eval_spf, '') <> 'pass' THEN rec.msg_count ELSE 0 END), 0) AS n_fails
@@ -274,48 +209,62 @@ require __DIR__ . '/../src/views/header.php';
     <?php require __DIR__ . '/../src/views/date_filter.php'; ?>
 </div>
 
-<?php if ($healthCards): ?>
-<!-- Per-domain health over the last N days. Each card is a link that
-     filters the whole dashboard to its domain; clicking the selected
-     card again goes back to all domains. -->
+<?php if ($overview): ?>
+<!-- Domain cards over the last N days: one per main domain, one row per
+     sending domain (subdomains under their parent). A row's name filters
+     the dashboard to it (when it has reports of its own); clicking the
+     selected one again goes back to all domains. -->
 <div class="section-label">Domains · last <?= $healthDays ?> days</div>
 <div class="domain-cards">
-    <?php foreach ($healthCards as $d => $h):
-        $isSel = ($domain === $d); ?>
-        <a class="domain-card <?= e($h['state']) ?><?= $isSel ? ' selected' : '' ?>"
-           href="index.php?domain=<?= $isSel ? '' : e(urlencode($d)) ?>"
-           title="<?= $isSel ? 'Show all domains' : 'Show only this domain' ?>">
-            <div class="dc-head">
-                <span class="dc-domain"><?= e($d) ?></span>
-                <span class="badge neutral">p=<?= e($h['policy'] ?? '?') ?></span>
-            </div>
-            <?php if ($h['total'] > 0): ?>
-                <div class="value <?= e($h['state']) ?>"><?= pct($h['total'] - $h['fails'], $h['total']) ?></div>
-                <div class="sub">DMARC pass</div>
-                <?php // Proportional bar: aligned / partial / fail (same colors as the chart). ?>
-                <div class="mix" aria-hidden="true">
-                    <span class="ok"   style="width:<?= round($h['aligned'] / $h['total'] * 100, 2) ?>%"></span>
-                    <span class="warn" style="width:<?= round($h['partial'] / $h['total'] * 100, 2) ?>%"></span>
-                    <span class="bad"  style="width:<?= round($h['fails'] / $h['total'] * 100, 2) ?>%"></span>
+    <?php foreach ($overview as $g => $group): ?>
+        <div class="domain-card <?= e($group['state']) ?>">
+            <?php foreach ($group['rows'] as $name => $row):
+                $isSel   = ($domain !== null && strtolower($domain) === $name);
+                // Only names that are a report domain can be filtered on.
+                $canLink = in_array($name, array_map('strtolower', known_domains()), true); ?>
+                <div class="dc-row<?= $name === $g ? ' main' : '' ?><?= $isSel ? ' selected' : '' ?>">
+                    <div class="dc-head">
+                        <?php if ($canLink): ?>
+                            <a class="dc-domain" href="index.php?domain=<?= $isSel ? '' : e(urlencode($name)) ?>"
+                               title="<?= $isSel ? 'Show all domains' : 'Show only this domain' ?>"><?= e($name) ?></a>
+                        <?php else: ?>
+                            <span class="dc-domain"><?= e($name) ?></span>
+                        <?php endif; ?>
+                        <span>
+                            <?php if ($row['type'] === 'parked'): ?><span class="badge neutral" title="Configured as a domain that sends no mail">parked</span><?php endif; ?>
+                            <span class="badge neutral" title="<?= $row['policy'] === null ? 'No DMARC policy found' : e("{$row['policy_tag']}= of _dmarc.{$row['policy_domain']} (from {$row['policy_from']})") ?>">p=<?= e($row['policy'] ?? '?') ?></span>
+                        </span>
+                    </div>
+                    <div class="dc-value <?= e($row['state']) ?>"><?= e($row['value']) ?></div>
+                    <?php if ($row['total'] > 0 && $row['type'] === 'sending'): ?>
+                        <?php // Proportional bar: aligned / partial / fail (same colors as the chart). ?>
+                        <div class="mix" aria-hidden="true">
+                            <span class="ok"   style="width:<?= round($row['aligned'] / $row['total'] * 100, 2) ?>%"></span>
+                            <span class="warn" style="width:<?= round($row['partial'] / $row['total'] * 100, 2) ?>%"></span>
+                            <span class="bad"  style="width:<?= round($row['fails'] / $row['total'] * 100, 2) ?>%"></span>
+                        </div>
+                    <?php endif; ?>
+                    <div class="sub"><?= e($row['detail']) ?></div>
+                    <div class="advice <?= e($row['advice']['level']) ?>"><?= e($row['advice']['text']) ?></div>
+                    <div class="sub">Last report: <?= e(fmt_date($row['last'])) ?></div>
                 </div>
-                <div class="sub">
-                    <?= number_format($h['total']) ?> messages ·
-                    <?= $h['fails'] > 0 ? '<strong class="bad">' . number_format($h['fails']) . ' failed</strong>' : 'no failures' ?>
-                </div>
-            <?php else: ?>
-                <div class="value neutral">No data</div>
-                <div class="sub">no reports in the last <?= $healthDays ?> days</div>
-            <?php endif; ?>
-            <div class="sub">Last report: <?= e(fmt_date($h['last'])) ?></div>
-        </a>
+            <?php endforeach; ?>
+        </div>
     <?php endforeach; ?>
 </div>
 <?php endif; ?>
 
-<?php if ($advisor): ?>
-    <div class="panel advisor <?= e($advisor['state']) ?>">
-        <div class="headline"><?= e($advisor['headline']) ?></div>
-        <p><?= e($advisor['body']) ?></p>
+<?php if ($advisorRow):
+    // Panel color: the row's state, except that a "ready" step is good news.
+    $advState = match ($advisorRow['advice']['level']) {
+        'ready', 'ok' => 'ok',
+        'fix'         => 'bad',
+        'wait'        => 'warn',
+        default       => 'neutral',
+    }; ?>
+    <div class="panel advisor <?= e($advState) ?>">
+        <div class="headline">Policy advisor · <?= e($advisorRow['name']) ?> (p=<?= e($advisorRow['policy'] ?? '?') ?>)</div>
+        <p><?= e($advisorRow['advice']['text']) ?></p>
     </div>
 <?php endif; ?>
 
@@ -457,19 +406,20 @@ require __DIR__ . '/../src/views/header.php';
 <table>
     <thead>
     <tr>
-        <th>Period</th><th>Reporter</th><th>Domain</th><th>Policy</th>
+        <th>Period</th><th>Reporter</th><th>Domain</th><th>Header From</th><th>Policy</th>
         <th class="num">Records</th><th class="num">Messages</th><th class="num">Fails</th><th></th>
     </tr>
     </thead>
     <tbody>
     <?php if (!$reports): ?>
-        <tr><td colspan="8" class="muted">No reports in this date range — upload some first.</td></tr>
+        <tr><td colspan="9" class="muted">No reports in this date range — upload some first.</td></tr>
     <?php endif; ?>
     <?php foreach ($reports as $r): ?>
         <tr class="<?= $r['n_fails'] > 0 ? 'row-bad' : '' ?>">
             <td><?= e(fmt_date($r['date_begin'])) ?> → <?= e(fmt_date($r['date_end'])) ?></td>
             <td><?= e($r['org_name']) ?></td>
             <td class="mono"><?= e($r['domain']) ?></td>
+            <td class="mono"><?= e($r['header_froms'] ?? '—') ?></td>
             <td><span class="badge neutral">p=<?= e($r['policy_p'] ?? '?') ?></span></td>
             <td class="num"><?= (int)$r['n_records'] ?></td>
             <td class="num"><?= number_format((int)$r['n_msgs']) ?></td>

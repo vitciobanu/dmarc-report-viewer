@@ -11,6 +11,7 @@ $nav = [
     'dashboard' => ['index.php',  'Dashboard'],
     'upload'    => ['upload.php', 'Upload'],
     'ips'       => ['ips.php',    'Source IPs'],
+    'dns'       => ['dns.php',    'DNS'],
 ];
 ?>
 <!DOCTYPE html>
