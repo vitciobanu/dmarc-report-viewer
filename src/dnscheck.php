@@ -102,8 +102,9 @@ function dns_prefetch(array $queries): void
         if ($records !== null) {
             $cache[$key] = $records;
         }
+        // No curl_close(): since PHP 8.0 a handle is freed automatically
+        // when nothing references it (the call is deprecated in 8.5).
         curl_multi_remove_handle($multi, $h);
-        curl_close($h);
     }
     curl_multi_close($multi);
 }
